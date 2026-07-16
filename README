@@ -1,0 +1,221 @@
+# 🧠 Anki Generator Pro
+
+> AI-powered Anki flashcard pipeline for medical students and language learners.  
+> Turns YouTube lectures and PDF textbooks into high-quality, exam-ready cards — automatically.
+
+---
+
+## What This Is
+
+A personal study tool built by a 4th-year medical student to solve a real problem: **Dr. Najeeb's lectures are 60+ minutes each, and manually making Anki cards from them takes hours**. This pipeline does it in under 15 minutes, using multiple AI providers with automatic failover.
+
+The system is also designed for German language learning (Menschen A1/A2 textbook), generating vocabulary cards with articles, plurals, and cloze deletions.
+
+---
+
+## Current State (June 2026)
+
+### ✅ What Works
+
+C:\Users\Admin\Downloads\Menschen A1.1 KB.pdf must switch to choosen file type from typing type
+
+| Feature                                                         | Status     |
+| --------------------------------------------------------------- | ---------- |
+| YouTube → Anki cards                                            | ✅ Working |
+| PDF → Anki cards                                                | ✅ Working |
+| Smart chunking (pause-based for YouTube, heading-based for PDF) | ✅ Working |
+| Topic detection per chunk                                       | ✅ Working |
+| Multi-AI generation with fallback                               | ✅ Working |
+| Groq semantic filtering (removes weak/duplicate cards)          | ✅ Working |
+| Gemini Pro quality control (+mnemonics)                         | ✅ Working |
+| Basic + Cloze card types                                        | ✅ Working |
+| Web UI (Flask + HTML)                                           | ✅ Working |
+| Terminal menu                                                   | ✅ Working |
+| API usage monitor                                               | ✅ Working |
+| Daily quota reset                                               | ✅ Working |
+
+### 📊 Pipeline Stats (first real run)
+
+- **Source:** Dr. Najeeb — CSF lecture (60 min)
+- **Raw cards generated:** 103
+- **After Groq filter:** 41 (removed: 7 vague, 12 trivial, 5 incomplete, 36 duplicates)
+- **Final cards:** 41
+- **Mnemonics added:** 2
+- **Phrasing improved:** 18
+- **Duration:** ~11 minutes
+
+---
+
+## Architecture
+
+```
+Source (YouTube URL or PDF path)
+        ↓
+chunker.py — Smart splitting
+  YouTube: pause-based (>2.5s gap = boundary, max 10 min, min 2 min)
+  PDF:     heading-based (Kapitel/Chapter/Unit), fallback to paragraphs
+        ↓
+generator.py — Topic detection + card generation
+  Gemini Flash detects topic of each chunk (4-6 words)
+  Gemini Flash generates 15-35 Basic + Cloze cards per chunk
+        ↓
+filter.py — Groq Llama quality filter
+  Removes: too vague, trivial, incomplete, broken cards
+  Semantic deduplication across all chunks
+        ↓
+quality.py — Gemini Pro polish
+  Adds mnemonics for lists of 3+ items
+  Improves vague question phrasing
+  Fixes medical inaccuracies silently
+        ↓
+pipeline.py — Saves to output/ as Anki .txt
+  Basic cards  → #notetype:Basic
+  Cloze cards  → #notetype:Cloze
+```
+
+### AI Provider Fallback
+
+```
+Gemini Flash (attempt 1) → wait 15s
+Gemini Flash (attempt 2) → wait 30s
+Gemini Flash (attempt 3) → switch to fallback
+        ↓
+NVIDIA Llama 3.3 70B (priority 2)
+        ↓
+Groq Llama 3.3 70B (priority 3)
+        ↓
+OpenRouter Llama (priority 4)
+```
+
+---
+
+## File Structure
+
+```
+C:\анки учеба\
+  ├── anki_gen.py      — YouTube transcript fetching + Gemini card generation
+  ├── pdf_gen.py       — PDF text extraction + Gemini card generation
+  ├── chunker.py       — Smart chunking (YouTube by pauses, PDF by headings)
+  ├── generator.py     — Multi-AI orchestrator with fallback logic
+  ├── filter.py        — Groq Llama semantic filtering + deduplication
+  ├── quality.py       — Gemini Pro quality control + mnemonics
+  ├── usage.py         — API quota tracking (resets daily)
+  ├── pipeline.py      — Main pipeline connecting all steps
+  ├── server.py        — Flask web server
+  ├── main.py          — Terminal menu interface
+  ├── index.html       — Web UI
+  ├── config.json      — API keys + settings
+  └── output/          — Generated .txt files ready for Anki import
+```
+
+---
+
+## API Keys Used
+
+| Provider                          | Purpose                         | Free Limit    |
+| --------------------------------- | ------------------------------- | ------------- |
+| Gemini Flash (`gemini_api_key`)   | Card generation (primary)       | 1500 req/day  |
+| Gemini Pro (`gemini_pro_key`)     | Quality control + mnemonics     | 50 req/day    |
+| Groq (`groq_api_key`)             | Filtering + fallback generation | 14400 req/day |
+| NVIDIA NIM (`nvidia_api_key`)     | Fallback when Gemini 503        | 1000 credits  |
+| OpenRouter (`openrouter_api_key`) | Last resort fallback            | 200 req/day   |
+
+---
+
+## Known Issues
+
+### 🔴 Must Fix
+
+- **Markdown in card backs** — Gemini returns `**bold**` syntax but Anki needs HTML (`<b>bold</b>`). Cards currently show raw asterisks in the app. Fix: post-process card backs to convert markdown to HTML before saving.
+
+- **9 of 16 chunks failed** in first run due to Gemini 429 rate limit. NVIDIA/Groq fallback failed because `_parse_response` wasn't stripping their response format correctly. Fix: test each provider's response format and adjust parser.
+
+- **Speed** — 11 minutes for a 60-minute lecture is slow. Main bottleneck: Gemini 503/429 waits (up to 90 seconds per chunk). Fix: parallel processing of chunks that don't have rate limit issues.
+
+### 🟡 Should Fix
+
+- **Fallback AI prompt format** — NVIDIA and Groq use `GROQ_CARD_PROMPT` which doesn't have `{{` escaping for JSON examples. May cause `KeyError` on some inputs. Needs same fix applied to `SYSTEM_PROMPT` in `anki_gen.py`.
+
+- **Quality step uses same key as generation** — When Gemini Flash is rate-limited during generation, it's also rate-limited during quality check immediately after. Should use a separate key or add a longer pause between steps.
+
+- **Usage monitor doesn't track actual tokens** — Currently estimates 2000 tokens per request. Real usage varies 500–8000. Should parse actual token counts from API responses.
+
+- **`<br>` tag display** — Cards were saved with `#html:true` but some cards still show `<br>` as text. Needs verification during Anki import (must check "Allow HTML in fields").
+
+### 🟢 Nice to Have
+
+- Parallel chunk processing (would cut time from 11 min to ~3 min)
+- Resume interrupted pipeline (save progress per chunk)
+- Card preview before saving (approve/reject individual cards)
+- Export directly to `.apkg` format (no manual import needed)
+- Deck hierarchy in Anki (`Neuroanatomy::CSF::Formation`)
+
+---
+
+## Roadmap
+
+### Phase 1 — Stability (next session)
+
+- [ ] Fix markdown → HTML conversion in card backs
+- [ ] Fix NVIDIA/Groq fallback JSON parsing
+- [ ] Add 60-second pause between generation and quality steps
+- [ ] Test with Menschen A1 PDF (German language mode)
+
+### Phase 2 — Speed
+
+- [ ] Parallel chunk processing with rate limit awareness
+- [ ] Resume capability (skip already-processed chunks)
+- [ ] Smarter rate limit detection (read `Retry-After` header)
+
+### Phase 3 — Quality
+
+- [ ] Cloze cards tested end-to-end in AnkiDroid
+- [ ] Deck hierarchy support (`::` separator)
+- [ ] Source citation on card back (timestamp for YouTube, page for PDF)
+- [ ] Image support for anatomical diagrams (like Mnemosyne decks)
+
+### Phase 4 — Scale
+
+- [ ] Process entire Dr. Najeeb neuroanatomy playlist (50+ videos)
+- [ ] Process entire Menschen A1+A2 textbook
+- [ ] Share generated decks with other medical students
+
+---
+
+## How to Run
+
+```bash
+# Web UI (recommended)
+python server.py
+# Opens http://localhost:5000 automatically
+
+# Terminal menu
+python main.py
+
+# Direct pipeline test
+python pipeline.py youtube https://youtu.be/VIDEO_ID "Deck Name"
+python pipeline.py pdf "C:\path\to\book.pdf" "Deck Name" 11 50
+```
+
+**Import to Anki:**
+
+1. File → Import
+2. Select the `.txt` file from `output/`
+3. Check "Allow HTML in fields"
+4. Click Import
+
+---
+
+## Built With
+
+- Python 3.13
+- Flask + Flask-CORS (web server)
+- google-genai (Gemini API)
+- groq (Groq API)
+- openai (NVIDIA NIM + OpenRouter)
+- youtube-transcript-api
+- pdfplumber
+
+---
+
+_Started June 2026 · Medical student project · Built for personal use_

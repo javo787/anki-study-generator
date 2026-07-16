@@ -1,0 +1,839 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Anki Generator Pro</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0a0a0a; color: #e0e0e0; min-height: 100vh; }
+
+/* ── LAYOUT ── */
+.sidebar { position: fixed; left: 0; top: 0; width: 230px; height: 100vh; background: #111; border-right: 1px solid #222; display: flex; flex-direction: column; }
+.main { margin-left: 230px; padding: 2rem; max-width: 820px; }
+.page { display: none; }
+.page.active { display: block; }
+
+/* ── SIDEBAR ── */
+.logo { padding: 1.25rem; border-bottom: 1px solid #222; }
+.logo h1 { font-size: 14px; font-weight: 600; color: #fff; letter-spacing: 0.02em; }
+.logo p  { font-size: 11px; color: #555; margin-top: 3px; }
+.nav { padding: 0.75rem 0; flex: 1; overflow-y: auto; }
+.nav-section { font-size: 10px; font-weight: 600; color: #444; text-transform: uppercase; letter-spacing: 0.08em; padding: 8px 16px 4px; }
+.nav-item { display: flex; align-items: center; gap: 9px; padding: 8px 16px; font-size: 13px; color: #777; cursor: pointer; transition: all 0.12s; border-left: 2px solid transparent; }
+.nav-item:hover { color: #ccc; background: #161616; }
+.nav-item.active { color: #fff; background: #161616; border-left-color: #6c8ef5; }
+.nav-item .dot { width: 6px; height: 6px; border-radius: 50%; background: #333; flex-shrink: 0; }
+.nav-item .dot.ok { background: #4caf82; }
+.nav-item .dot.warn { background: #f0a050; }
+.nav-item .dot.err { background: #e57373; }
+.sidebar-footer { padding: 1rem; border-top: 1px solid #222; font-size: 11px; color: #444; }
+
+/* ── TYPOGRAPHY ── */
+.page-title { font-size: 18px; font-weight: 600; color: #fff; margin-bottom: 3px; }
+.page-sub   { font-size: 13px; color: #555; margin-bottom: 1.75rem; }
+
+/* ── CARDS ── */
+.card { background: #111; border: 1px solid #1e1e1e; border-radius: 10px; padding: 1.25rem; margin-bottom: 1rem; }
+.card-title { font-size: 11px; font-weight: 600; color: #555; text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 1rem; }
+
+/* ── FORM ── */
+label { display: block; font-size: 12px; color: #666; margin-bottom: 5px; }
+input[type="text"], input[type="number"], input[type="password"] {
+  width: 100%; background: #0a0a0a; border: 1px solid #1e1e1e; border-radius: 6px;
+  padding: 9px 12px; font-size: 13px; color: #e0e0e0; outline: none; transition: border-color 0.15s;
+}
+input:focus { border-color: #6c8ef5; }
+.field { margin-bottom: 1rem; }
+.field:last-child { margin-bottom: 0; }
+.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.divider { border: none; border-top: 1px solid #1e1e1e; margin: 1.1rem 0; }
+
+/* ── SOURCE BUTTONS ── */
+.source-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 1rem; }
+.source-btn { background: #0a0a0a; border: 1px solid #1e1e1e; border-radius: 8px; padding: 13px; cursor: pointer; text-align: left; transition: all 0.12s; }
+.source-btn:hover { border-color: #333; }
+.source-btn.active { border-color: #6c8ef5; background: #12172a; }
+.source-btn .s-icon  { font-size: 18px; margin-bottom: 5px; }
+.source-btn .s-label { font-size: 13px; font-weight: 500; color: #e0e0e0; }
+.source-btn .s-sub   { font-size: 11px; color: #555; margin-top: 2px; }
+.source-btn.active .s-sub { color: #6c8ef5; }
+
+/* ── CHIPS ── */
+.chip-group { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { padding: 5px 12px; border-radius: 20px; font-size: 12px; border: 1px solid #1e1e1e; background: #0a0a0a; color: #666; cursor: pointer; transition: all 0.12s; user-select: none; }
+.chip:hover { border-color: #333; color: #aaa; }
+.chip.active { background: #12172a; border-color: #6c8ef5; color: #8ab0f8; }
+
+/* ── TOGGLES ── */
+.toggle-row { display: flex; align-items: center; justify-content: space-between; padding: 8px 0; }
+.toggle-row:not(:last-child) { border-bottom: 1px solid #1a1a1a; }
+.toggle-label { font-size: 13px; color: #ccc; }
+.toggle-sub { font-size: 11px; color: #555; margin-top: 2px; }
+.toggle { position: relative; width: 36px; height: 20px; flex-shrink: 0; }
+.toggle input { opacity: 0; width: 0; height: 0; }
+.toggle-slider { position: absolute; inset: 0; background: #222; border-radius: 20px; cursor: pointer; transition: 0.2s; }
+.toggle-slider:before { content: ""; position: absolute; width: 14px; height: 14px; left: 3px; top: 3px; background: #555; border-radius: 50%; transition: 0.2s; }
+.toggle input:checked + .toggle-slider { background: #1a2a4a; }
+.toggle input:checked + .toggle-slider:before { transform: translateX(16px); background: #6c8ef5; }
+
+/* ── BUTTONS ── */
+.btn { display: inline-flex; align-items: center; gap: 8px; padding: 10px 18px; border-radius: 7px; font-size: 13px; font-weight: 500; cursor: pointer; border: none; transition: all 0.12s; }
+.btn-primary  { background: #6c8ef5; color: #fff; }
+.btn-primary:hover { background: #5a7de4; }
+.btn-primary:disabled { background: #1a2540; color: #445; cursor: not-allowed; }
+.btn-secondary { background: #161616; border: 1px solid #222; color: #aaa; }
+.btn-secondary:hover { background: #1e1e1e; color: #e0e0e0; }
+.btn-danger { background: #2a1212; border: 1px solid #3a1a1a; color: #e57373; }
+.btn-danger:hover { background: #331515; }
+.btn-full { width: 100%; justify-content: center; }
+
+/* ── PROGRESS ── */
+.progress-wrap { margin-top: 1rem; display: none; }
+.progress-stages { display: flex; gap: 6px; margin-bottom: 10px; }
+.stage-dot { flex: 1; height: 3px; background: #1e1e1e; border-radius: 2px; transition: background 0.3s; }
+.stage-dot.active { background: #6c8ef5; }
+.stage-dot.done   { background: #4caf82; }
+.progress-label { font-size: 12px; color: #666; margin-bottom: 6px; }
+.progress-bar { height: 3px; background: #1e1e1e; border-radius: 2px; overflow: hidden; }
+.progress-fill { height: 100%; background: linear-gradient(90deg, #6c8ef5, #4caf82); border-radius: 2px; transition: width 0.4s; width: 0%; }
+.progress-steps { display: flex; justify-content: space-between; margin-top: 6px; }
+.progress-step  { font-size: 10px; color: #333; }
+.progress-step.active { color: #6c8ef5; }
+.progress-step.done   { color: #4caf82; }
+
+/* ── RESULT ── */
+.result-card { display: none; border-radius: 10px; padding: 1.25rem; margin-top: 1rem; }
+.result-card.success { background: #0a1a0f; border: 1px solid #1a3a22; }
+.result-card.error   { background: #1a0a0a; border: 1px solid #3a1a1a; }
+.result-stats { display: flex; gap: 1.5rem; margin-bottom: 1rem; }
+.stat { text-align: center; }
+.stat-num { font-size: 26px; font-weight: 600; color: #4caf82; }
+.stat-num.warn { color: #f0a050; }
+.stat-label { font-size: 11px; color: #4caf82; margin-top: 2px; }
+.stages-summary { background: #0f0f0f; border-radius: 6px; padding: 10px 12px; margin-bottom: 1rem; font-size: 12px; color: #666; }
+.stages-summary span { color: #aaa; }
+.preview-list { list-style: none; }
+.preview-item { padding: 9px 0; border-bottom: 1px solid #1a2a1a; }
+.preview-item:last-child { border-bottom: none; }
+.preview-q { font-size: 12px; color: #6c8ef5; margin-bottom: 3px; }
+.preview-a { font-size: 12px; color: #777; }
+.error-msg { font-size: 13px; color: #e57373; }
+
+/* ── USAGE ── */
+.usage-grid { display: flex; flex-direction: column; gap: 10px; }
+.usage-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid #161616; }
+.usage-row:last-child { border-bottom: none; }
+.usage-name { font-size: 13px; color: #ccc; width: 130px; flex-shrink: 0; }
+.usage-bars { flex: 1; }
+.usage-bar-row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.usage-bar-row:last-child { margin-bottom: 0; }
+.usage-bar-label { font-size: 10px; color: #444; width: 48px; flex-shrink: 0; }
+.usage-bar-track { flex: 1; height: 4px; background: #1a1a1a; border-radius: 2px; overflow: hidden; }
+.usage-bar-fill  { height: 100%; border-radius: 2px; transition: width 0.5s; }
+.usage-bar-fill.ok   { background: #4caf82; }
+.usage-bar-fill.warn { background: #f0a050; }
+.usage-bar-fill.err  { background: #e57373; }
+.usage-bar-val { font-size: 10px; color: #444; width: 60px; text-align: right; flex-shrink: 0; }
+.usage-status { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: #4caf82; }
+.usage-status.off { background: #333; }
+.usage-reset-btn { font-size: 11px; color: #444; background: none; border: none; cursor: pointer; padding: 2px 6px; }
+.usage-reset-btn:hover { color: #e57373; }
+
+/* ── SETTINGS ── */
+.settings-group { margin-bottom: 1.5rem; }
+.key-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.key-label { font-size: 13px; color: #ccc; width: 130px; flex-shrink: 0; }
+.key-badge { font-size: 11px; padding: 2px 8px; border-radius: 4px; flex-shrink: 0; }
+.key-badge.set  { background: #0d2a1a; color: #4caf82; }
+.key-badge.unset { background: #1a1a1a; color: #555; }
+.key-input-row { display: flex; gap: 8px; align-items: center; }
+.key-input-row input { flex: 1; }
+
+/* ── FILES ── */
+.files-list { list-style: none; }
+.file-item { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #161616; }
+.file-item:last-child { border-bottom: none; }
+.file-name { font-size: 13px; color: #ccc; }
+.file-meta { font-size: 11px; color: #444; margin-top: 2px; }
+.file-dl { font-size: 12px; color: #6c8ef5; background: none; border: none; cursor: pointer; }
+.file-dl:hover { color: #8ab0f8; }
+
+/* ── SPINNER ── */
+.spinner { display: inline-block; width: 13px; height: 13px; border: 2px solid rgba(255,255,255,0.2); border-top-color: #fff; border-radius: 50%; animation: spin 0.7s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+#dropZone.drag-over {
+  border-color: #6c8ef5;
+  background: #12172a;
+  color: #8ab0f8;
+}
+
+#videoDropZone.drag-over {
+  border-color: #6c8ef5;
+  background: #12172a;
+  color: #8ab0f8;
+}
+</style>
+</head>
+<body>
+
+<nav class="sidebar">
+  <div class="logo">
+    <h1>🧠 Anki Generator Pro</h1>
+    <p>Multi-AI card pipeline</p>
+  </div>
+
+  <div class="nav">
+    <div class="nav-section">Generate</div>
+    <div class="nav-item active" onclick="showPage('generate', this)">
+      <span>✦</span> Generate cards
+    </div>
+    <div class="nav-item" onclick="showPage('files', this)">
+      <span>◫</span> Output files
+    </div>
+
+    <div class="nav-section" style="margin-top:8px">Monitor</div>
+    <div class="nav-item" onclick="showPage('usage', this)">
+      <span>◈</span> API usage
+    </div>
+
+    <div class="nav-section" style="margin-top:8px">Config</div>
+    <div class="nav-item" onclick="showPage('settings', this)">
+      <span>⚙</span> Settings
+    </div>
+  </div>
+
+  <div class="sidebar-footer" id="sidebarStatus">Checking API keys...</div>
+</nav>
+
+<main class="main">
+
+  <!-- ── GENERATE ─────────────────────────────────────────────────── -->
+  <div class="page active" id="page-generate">
+    <div class="page-title">Generate cards</div>
+    <div class="page-sub">YouTube lectures or PDF books → Anki-ready flashcards.</div>
+
+    <div class="card">
+      <div class="card-title">Source</div>
+      <div class="source-grid" style="grid-template-columns: 1fr 1fr 1fr">
+        <button class="source-btn active" id="srcYT" onclick="selectSource('youtube')">
+          <div class="s-icon">▶</div>
+          <div class="s-label">YouTube</div>
+          <div class="s-sub">Auto-transcript</div>
+        </button>
+        <button class="source-btn" id="srcPDF" onclick="selectSource('pdf')">
+          <div class="s-icon">📄</div>
+          <div class="s-label">PDF book</div>
+          <div class="s-sub">Heading-aware split</div>
+        </button>
+        <button class="source-btn" id="srcVID" onclick="selectSource('video')">
+          <div class="s-icon">🎬</div>
+          <div class="s-label">Local video</div>
+          <div class="s-sub">Groq Whisper + ffmpeg</div>
+        </button>
+      </div>
+
+      <div id="ytFields">
+        <div class="field">
+          <label>YouTube URL</label>
+          <input type="text" id="ytUrl" placeholder="https://youtu.be/...">
+        </div>
+      </div>
+
+      <div id="pdfFields" style="display:none">
+        <div class="field">
+          <label>PDF file path</label>
+          <div id="dropZone" onclick="document.getElementById('fileInput').click()"
+            ondragover="event.preventDefault();this.classList.add('drag-over')"
+            ondragleave="this.classList.remove('drag-over')"
+            ondrop="handleDrop(event)"
+            style="
+              border: 1.5px dashed #2a2a2a; border-radius: 8px; padding: 20px;
+              text-align: center; cursor: pointer; transition: all 0.15s;
+              background: #0a0a0a; color: #555; font-size: 13px;
+            ">
+            <div style="font-size:24px;margin-bottom:6px">📄</div>
+            <div>Drop PDF here or <span style="color:#6c8ef5">click to browse</span></div>
+            <div id="dropFileName" style="margin-top:6px;color:#8ab0f8;font-size:12px"></div>
+          </div>
+          <input type="file" id="fileInput" accept=".pdf" style="display:none" onchange="handleFileSelect(event)">
+          <div style="margin-top:8px;display:flex;align-items:center;gap:8px">
+            <span style="font-size:11px;color:#444">or type path:</span>
+            <input type="text" id="pdfPath" placeholder='C:\анки учеба\menschen_a1.pdf' style="flex:1">
+          </div>
+        </div>
+        <div class="field">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+            <input type="checkbox" id="allPages" onchange="togglePages()" checked style="width:auto">
+            All pages
+          </label>
+        </div>
+        <div id="pageRange" class="row2" style="display:none">
+          <div class="field">
+            <label>From page</label>
+            <input type="number" id="pageFrom" value="1" min="1">
+          </div>
+          <div class="field">
+            <label>To page</label>
+            <input type="number" id="pageTo" value="50" min="1">
+          </div>
+        </div>
+      </div>
+
+      <!-- videoFields (замена) -->
+      <div id="videoFields" style="display:none">
+        <div class="field">
+          <label>Video file (.flv, .mp4, .mkv, .avi, .mov)</label>
+          <div id="videoDropZone"
+            onclick="document.getElementById('videoFileInput').click()"
+            ondragover="event.preventDefault();this.classList.add('drag-over')"
+            ondragleave="this.classList.remove('drag-over')"
+            ondrop="handleVideoDrop(event)"
+            style="
+              border: 1.5px dashed #2a2a2a; border-radius: 8px; padding: 20px;
+              text-align: center; cursor: pointer; transition: all 0.15s;
+              background: #0a0a0a; color: #555; font-size: 13px;
+            ">
+            <div style="font-size:24px;margin-bottom:6px">🎬</div>
+            <div>Drop video here or <span style="color:#6c8ef5">click to browse</span></div>
+            <div id="videoDropFileName" style="margin-top:6px;color:#8ab0f8;font-size:12px"></div>
+          </div>
+          <input type="file" id="videoFileInput" accept=".flv,.mp4,.mkv,.avi,.mov,.m4a,.mp3" style="display:none" onchange="handleVideoFileSelect(event)">
+          <div style="margin-top:8px;display:flex;align-items:center;gap:8px">
+            <span style="font-size:11px;color:#444">or type path:</span>
+            <input type="text" id="videoPath" placeholder='C:\Users\Admin\Downloads\lecture.flv' style="flex:1">
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Options</div>
+
+      <div class="field">
+        <label>Deck name</label>
+        <input type="text" id="deckName" placeholder="e.g. Neuroanatomy - CSF" value="Neuroanatomy - Intro">
+      </div>
+
+      <hr class="divider">
+
+      <div class="field">
+        <label>Card language</label>
+        <div class="chip-group" id="langGroup">
+          <span class="chip active" onclick="selectChip('lang', this, 'en')">English</span>
+          <span class="chip" onclick="selectChip('lang', this, 'ru')">Russian</span>
+          <span class="chip" onclick="selectChip('lang', this, 'de')">Deutsch</span>
+        </div>
+      </div>
+
+      <hr class="divider">
+
+      <div class="toggle-row">
+        <div>
+          <div class="toggle-label">Groq filtering</div>
+          <div class="toggle-sub">Remove weak and duplicate cards</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="toggleFilter" checked>
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+
+      <div class="toggle-row">
+        <div>
+          <div class="toggle-label">Gemini Pro quality</div>
+          <div class="toggle-sub">Add mnemonics, improve phrasing</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="toggleQuality" checked>
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+
+      <div class="toggle-row">
+        <div>
+          <div class="toggle-label">Topic detection</div>
+          <div class="toggle-sub">Name each chunk for better context</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="toggleTopics" checked>
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+    </div>
+
+    <button class="btn btn-primary btn-full" id="genBtn" onclick="generate()">
+      <span id="genBtnText">Generate cards</span>
+    </button>
+
+    <!-- Progress -->
+    <div class="progress-wrap" id="progressWrap">
+      <div class="progress-stages">
+        <div class="stage-dot" id="sd1"></div>
+        <div class="stage-dot" id="sd2"></div>
+        <div class="stage-dot" id="sd3"></div>
+        <div class="stage-dot" id="sd4"></div>
+      </div>
+      <div class="progress-label" id="progressLabel">Starting...</div>
+      <div class="progress-bar">
+        <div class="progress-fill" id="progressFill"></div>
+      </div>
+      <div class="progress-steps">
+        <span class="progress-step" id="ps1">① Generate</span>
+        <span class="progress-step" id="ps2">② Filter</span>
+        <span class="progress-step" id="ps3">③ Quality</span>
+        <span class="progress-step" id="ps4">④ Save</span>
+      </div>
+    </div>
+
+    <!-- Result -->
+    <div class="result-card" id="resultCard">
+      <div class="result-stats" id="resultStats"></div>
+      <div class="stages-summary" id="stagesSummary"></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div style="font-size:12px;color:#555">Preview (first 3 cards)</div>
+        <button class="btn btn-secondary" id="dlBtn" onclick="downloadResult()" style="padding:6px 12px;font-size:12px">
+          ⬇ Download .txt
+        </button>
+      </div>
+      <ul class="preview-list" id="previewList"></ul>
+    </div>
+  </div>
+
+  <!-- ── FILES ─────────────────────────────────────────────────────── -->
+  <div class="page" id="page-files">
+    <div class="page-title">Output files</div>
+    <div class="page-sub">All generated Anki card files.</div>
+    <div class="card">
+      <ul class="files-list" id="filesList">
+        <li style="color:#444;font-size:13px">Loading...</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ── USAGE ─────────────────────────────────────────────────────── -->
+  <div class="page" id="page-usage">
+    <div class="page-title">API usage</div>
+    <div class="page-sub">Daily quota across all AI providers. Resets at midnight.</div>
+    <div class="card">
+      <div class="usage-grid" id="usageGrid">
+        <div style="color:#444;font-size:13px">Loading...</div>
+      </div>
+    </div>
+    <div style="margin-top:8px;display:flex;gap:8px">
+      <button class="btn btn-secondary" onclick="loadUsage()">↻ Refresh</button>
+      <button class="btn btn-danger" onclick="resetAllUsage()">Reset all counters</button>
+    </div>
+  </div>
+
+  <!-- ── SETTINGS ──────────────────────────────────────────────────── -->
+  <div class="page" id="page-settings">
+    <div class="page-title">Settings</div>
+    <div class="page-sub">API keys and default preferences.</div>
+
+    <div class="card">
+      <div class="card-title">API Keys</div>
+      <div id="keyRows"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Defaults</div>
+      <div class="field">
+        <label>Default language</label>
+        <div class="chip-group" id="defLangGroup">
+          <span class="chip" onclick="saveDefault('default_lang','en',this,'defLangGroup')">English</span>
+          <span class="chip" onclick="saveDefault('default_lang','ru',this,'defLangGroup')">Russian</span>
+          <span class="chip" onclick="saveDefault('default_lang','de',this,'defLangGroup')">Deutsch</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<script>
+// ── STATE ──────────────────────────────────────────────────────────────────────
+let currentSource  = 'youtube';
+let currentLang    = 'en';
+let lastFilename   = '';
+let sessionId      = 'sess_' + Date.now();
+let pollInterval   = null;
+
+const KEY_DEFS = [
+  { key: 'gemini_api_key',     label: 'Gemini Flash',  placeholder: 'AIza...' },
+  { key: 'gemini_pro_key',     label: 'Gemini Pro',    placeholder: 'AIza...' },
+  { key: 'groq_api_key',       label: 'Groq Llama',    placeholder: 'gsk_...' },
+  { key: 'openrouter_api_key', label: 'OpenRouter',    placeholder: 'sk-or-...' },
+  { key: 'cerebras_api_key',   label: 'Cerebras',      placeholder: 'csk-...' },
+];
+
+// ── NAV ────────────────────────────────────────────────────────────────────────
+function showPage(name, el) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById('page-' + name).classList.add('active');
+  if (el) el.classList.add('active');
+  if (name === 'files')    loadFiles();
+  if (name === 'usage')    loadUsage();
+  if (name === 'settings') loadSettings();
+}
+
+// ── SOURCE ─────────────────────────────────────────────────────────────────────
+function selectSource(type) {
+  currentSource = type;
+  document.getElementById('srcYT').classList.toggle('active',  type === 'youtube');
+  document.getElementById('srcPDF').classList.toggle('active', type === 'pdf');
+  document.getElementById('srcVID').classList.toggle('active', type === 'video');
+  document.getElementById('ytFields').style.display    = type === 'youtube' ? '' : 'none';
+  document.getElementById('pdfFields').style.display   = type === 'pdf'     ? '' : 'none';
+  document.getElementById('videoFields').style.display = type === 'video'   ? '' : 'none';
+}
+
+function togglePages() {
+  const all = document.getElementById('allPages').checked;
+  document.getElementById('pageRange').style.display = all ? 'none' : 'grid';
+}
+
+// ── CHIPS ──────────────────────────────────────────────────────────────────────
+function selectChip(group, el, value) {
+  if (group === 'lang') {
+    currentLang = value;
+    document.querySelectorAll('#langGroup .chip').forEach(c => c.classList.remove('active'));
+    el.classList.add('active');
+  }
+}
+
+// ── PROGRESS ───────────────────────────────────────────────────────────────────
+const STAGE_MAP = {
+  generating: { pct: 10, step: 1, label: 'Generating cards...' },
+  generated:  { pct: 40, step: 1, label: 'Cards generated ✓' },
+  filtering:  { pct: 50, step: 2, label: 'Filtering with Groq...' },
+  filtered:   { pct: 70, step: 2, label: 'Filtering complete ✓' },
+  quality:    { pct: 80, step: 3, label: 'Quality control with Gemini Pro...' },
+  done:       { pct: 100,step: 4, label: 'Done! Saving file...' },
+};
+
+function updateProgress(info) {
+  const pct   = info.pct || 0;
+  const stage = info.stage || 'idle';
+  const map   = STAGE_MAP[stage];
+
+  document.getElementById('progressFill').style.width = pct + '%';
+
+  if (map) {
+    const label = info.topic
+      ? `${map.label} — ${info.topic}`
+      : info.cards
+      ? `${map.label} (${info.cards} cards)`
+      : map.label;
+    document.getElementById('progressLabel').textContent = label;
+
+    // Update stage dots and steps
+    for (let i = 1; i <= 4; i++) {
+      const dot  = document.getElementById('sd' + i);
+      const step = document.getElementById('ps' + i);
+      if (i < map.step)      { dot.className = 'stage-dot done';   step.className = 'progress-step done'; }
+      else if (i === map.step){ dot.className = 'stage-dot active'; step.className = 'progress-step active'; }
+      else                   { dot.className = 'stage-dot';         step.className = 'progress-step'; }
+    }
+  }
+}
+
+function startPolling() {
+  if (pollInterval) clearInterval(pollInterval);
+  pollInterval = setInterval(async () => {
+    try {
+      const res  = await fetch(`/api/progress/${sessionId}`);
+      const info = await res.json();
+      updateProgress(info);
+      if (info.stage === 'done') stopPolling();
+    } catch(e) {}
+  }, 1200);
+}
+
+function stopPolling() {
+  if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+}
+
+// ── GENERATE ───────────────────────────────────────────────────────────────────
+async function generate() {
+  const btn     = document.getElementById('genBtn');
+  const btnText = document.getElementById('genBtnText');
+  const progWrap = document.getElementById('progressWrap');
+  const resultCard = document.getElementById('resultCard');
+
+  btn.disabled = true;
+  btnText.innerHTML = '<span class="spinner"></span> Running pipeline...';
+  progWrap.style.display = 'block';
+  resultCard.style.display = 'none';
+  resultCard.className = 'result-card';
+  updateProgress({ pct: 5, stage: 'generating' });
+  startPolling();
+
+  const body = {
+    deck:        document.getElementById('deckName').value.trim() || 'My Deck',
+    lang:        currentLang,
+    run_filter:  document.getElementById('toggleFilter').checked,
+    run_quality: document.getElementById('toggleQuality').checked,
+    session_id:  sessionId,
+  };
+
+  if (currentSource === 'youtube') {
+    body.youtube_url = document.getElementById('ytUrl').value.trim();
+    if (!body.youtube_url) { showError('Please enter the YouTube URL.'); resetBtn(); return; }
+  } else if (currentSource === 'pdf') {
+    body.pdf_path = document.getElementById('pdfPath').value.trim();
+    if (!body.pdf_path) { showError('Please enter the PDF path.'); resetBtn(); return; }
+  } else if (currentSource === 'video') {
+    body.video_path = document.getElementById('videoPath').value.trim();
+    if (!body.video_path) { showError('Please enter the video file path.'); resetBtn(); return; }
+  }
+
+  const endpoint = currentSource === 'youtube' ? '/api/generate/youtube' 
+                 : currentSource === 'pdf'     ? '/api/generate/pdf'
+                 :                               '/api/generate/video';
+
+  try {
+    const res  = await fetch(endpoint, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(body),
+    });
+    const data = await res.json();
+    stopPolling();
+
+    if (data.error) {
+      showError(data.error);
+    } else {
+      lastFilename = data.filename;
+      showResult(data);
+    }
+  } catch(e) {
+    stopPolling();
+    showError('Server not reachable. Is server.py running?');
+  }
+
+  resetBtn();
+  loadUsage();
+}
+
+function showResult(data) {
+  const card = document.getElementById('resultCard');
+  card.style.display = 'block';
+  card.className = 'result-card success';
+
+  // Stats
+  document.getElementById('resultStats').innerHTML = `
+    <div class="stat"><div class="stat-num">${data.count}</div><div class="stat-label">final cards</div></div>
+    <div class="stat"><div class="stat-num warn">${data.raw}</div><div class="stat-label">raw cards</div></div>
+    <div class="stat"><div class="stat-num">${data.filtered}</div><div class="stat-label">after filter</div></div>
+    <div class="stat"><div class="stat-num" style="color:#8ab0f8">${data.duration}s</div><div class="stat-label">duration</div></div>
+  `;
+
+  // Stages summary
+  const s = data.stages || {};
+  const gen = s.generation || {};
+  const fil = s.filter     || {};
+  const qua = s.quality    || {};
+  document.getElementById('stagesSummary').innerHTML =
+    `<span>Generate:</span> ${gen.cards || 0} cards from ${gen.chunks || 0} chunks &nbsp;|&nbsp; ` +
+    `<span>Filter:</span> ${fil.cards_in || 0}→${fil.cards_out || 0} &nbsp;|&nbsp; ` +
+    `<span>Quality:</span> +${qua.mnemonics_added || 0} mnemonics &nbsp;|&nbsp; ` +
+    `<span>Model:</span> ${qua.model_used || 'n/a'}`;
+
+  // Preview
+  const list = document.getElementById('previewList');
+  list.innerHTML = '';
+  (data.preview || []).forEach(card => {
+    const li = document.createElement('li');
+    li.className = 'preview-item';
+    const back = card.back.replace(/<br>/g, ' ').substring(0, 100);
+    li.innerHTML =
+      `<div class="preview-q">[${card.type || 'basic'}] ${card.front.substring(0, 100)}</div>` +
+      `<div class="preview-a">${back}</div>`;
+    list.appendChild(li);
+  });
+
+  updateProgress({ pct: 100, stage: 'done' });
+}
+
+function showError(msg) {
+  const card = document.getElementById('resultCard');
+  card.style.display = 'block';
+  card.className = 'result-card error';
+  card.innerHTML = `<div class="error-msg">❌ ${msg}</div>`;
+  document.getElementById('progressFill').style.width = '0%';
+}
+
+function resetBtn() {
+  const btn = document.getElementById('genBtn');
+  btn.disabled = false;
+  document.getElementById('genBtnText').textContent = 'Generate cards';
+}
+
+function downloadResult() {
+  if (lastFilename) window.location.href = '/api/download/' + lastFilename;
+}
+
+// ── FILES ──────────────────────────────────────────────────────────────────────
+async function loadFiles() {
+  const list = document.getElementById('filesList');
+  list.innerHTML = '<li style="color:#444;font-size:13px">Loading...</li>';
+  try {
+    const files = await (await fetch('/api/files')).json();
+    if (!files.length) {
+      list.innerHTML = '<li style="color:#444;font-size:13px">No files yet.</li>';
+      return;
+    }
+    list.innerHTML = '';
+    files.forEach(f => {
+      const li = document.createElement('li');
+      li.className = 'file-item';
+      li.innerHTML =
+        `<div><div class="file-name">${f.name}</div><div class="file-meta">${f.modified} · ${(f.size/1024).toFixed(1)} KB</div></div>` +
+        `<button class="file-dl" onclick="window.location.href='/api/download/${f.name}'">⬇ Download</button>`;
+      list.appendChild(li);
+    });
+  } catch(e) {
+    list.innerHTML = '<li style="color:#e57373;font-size:13px">Server not reachable.</li>';
+  }
+}
+
+// ── USAGE ──────────────────────────────────────────────────────────────────────
+async function loadUsage() {
+  try {
+    const usage = await (await fetch('/api/usage')).json();
+    const grid  = document.getElementById('usageGrid');
+    grid.innerHTML = '';
+
+    Object.entries(usage).forEach(([key, d]) => {
+      const reqPct  = Math.min(100, d.requests_pct);
+      const tokPct  = Math.min(100, d.tokens_pct);
+      const reqCls  = reqPct > 80 ? 'ok' : reqPct > 40 ? 'warn' : 'err';
+      const tokCls  = tokPct > 80 ? 'ok' : tokPct > 40 ? 'warn' : 'err';
+      const stCls   = d.available ? '' : 'off';
+
+      const row = document.createElement('div');
+      row.className = 'usage-row';
+      row.innerHTML = `
+        <div class="usage-status ${stCls}"></div>
+        <div class="usage-name">${d.label}</div>
+        <div class="usage-bars">
+          <div class="usage-bar-row">
+            <span class="usage-bar-label">Requests</span>
+            <div class="usage-bar-track"><div class="usage-bar-fill ${reqCls}" style="width:${reqPct}%"></div></div>
+            <span class="usage-bar-val">${d.requests_used}/${d.requests_limit}</span>
+          </div>
+          <div class="usage-bar-row">
+            <span class="usage-bar-label">Tokens</span>
+            <div class="usage-bar-track"><div class="usage-bar-fill ${tokCls}" style="width:${tokPct}%"></div></div>
+            <span class="usage-bar-val">${fmtNum(d.tokens_used)}/${fmtNum(d.tokens_limit)}</span>
+          </div>
+        </div>
+        <button class="usage-reset-btn" onclick="resetProviderUsage('${key}')">reset</button>
+      `;
+      grid.appendChild(row);
+    });
+
+    updateSidebarStatus(usage);
+  } catch(e) {}
+}
+
+async function resetProviderUsage(provider) {
+  await fetch('/api/usage/reset', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider }),
+  });
+  loadUsage();
+}
+
+async function resetAllUsage() {
+  if (!confirm('Reset all API usage counters?')) return;
+  await fetch('/api/usage/reset', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+  loadUsage();
+}
+
+function fmtNum(n) {
+  if (n >= 1000000) return (n/1000000).toFixed(1) + 'M';
+  if (n >= 1000)    return (n/1000).toFixed(0) + 'K';
+  return n;
+}
+
+function updateSidebarStatus(usage) {
+  const allOk  = Object.values(usage).every(d => d.available);
+  const someOk = Object.values(usage).some(d => d.available);
+  const footer = document.getElementById('sidebarStatus');
+  if (allOk)       footer.innerHTML = '<span style="color:#4caf82">● All AI providers ready</span>';
+  else if (someOk) footer.innerHTML = '<span style="color:#f0a050">● Some providers limited</span>';
+  else             footer.innerHTML = '<span style="color:#e57373">● All providers exhausted</span>';
+}
+
+// ── SETTINGS ───────────────────────────────────────────────────────────────────
+async function loadSettings() {
+  try {
+    const cfg = await (await fetch('/api/config')).json();
+    const keys = cfg.keys_set || {};
+    const container = document.getElementById('keyRows');
+    container.innerHTML = '';
+
+    KEY_DEFS.forEach(def => {
+      const isSet = keys[def.key.replace('_api_key','').replace('_key','')] ||
+                    keys[def.key] || false;
+      const row = document.createElement('div');
+      row.style
+      row.innerHTML = `
+        <div class="key-row">
+          <div class="key-label">${def.label}</div>
+          <span class="key-badge ${isSet ? 'set' : 'unset'}">${isSet ? 'Set ✓' : 'Not set'}</span>
+        </div>
+        <div class="key-input-row">
+          <input type="password" placeholder="${def.placeholder}" id="key_${def.key}">
+          <button class="btn btn-secondary" onclick="saveKey('${def.key}')" style="padding:8px 14px;font-size:12px">Save</button>
+        </div>
+      `;
+      container.appendChild(row);
+    });
+
+    // Default lang
+    const langMap = { en: 0, ru: 1, de: 2 };
+    const chips   = document.querySelectorAll('#defLangGroup .chip');
+    chips.forEach(c => c.classList.remove('active'));
+    chips[langMap[cfg.default_lang] ?? 0]?.classList.add('active');
+
+  } catch(e) {}
+}
+
+async function saveKey(fieldName) {
+  const val = document.getElementById('key_' + fieldName).value.trim();
+  if (!val) return;
+  await fetch('/api/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ [fieldName]: val }),
+  });
+  document.getElementById('key_' + fieldName).value = '';
+  loadSettings();
+  loadUsage();
+}
+
+async function saveDefault(field, value, el, groupId) {
+  document.querySelectorAll('#' + groupId + ' .chip').forEach(c => c.classList.remove('active'));
+  el.classList.add('active');
+  await fetch('/api/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ [field]: value }),
+  });
+}
+
+// ── INIT ───────────────────────────────────────────────────────────────────────
+loadUsage();
+</script>
+</body>
+</html>

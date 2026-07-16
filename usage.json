@@ -1,0 +1,35 @@
+{
+  "date": "2026-06-10",
+  "providers": {
+    "none": {
+      "requests": 43,
+      "tokens": 86000,
+      "errors": 0,
+      "last_used": "13:30:54"
+    },
+    "gemini_gemini-2.5-flash": {
+      "requests": 7,
+      "tokens": 14000,
+      "errors": 0,
+      "last_used": "12:37:28"
+    },
+    "groq": {
+      "requests": 2,
+      "tokens": 35850,
+      "errors": 0,
+      "last_used": "13:50:16"
+    },
+    "gemini_pro": {
+      "requests": 2,
+      "tokens": 26400,
+      "errors": 0,
+      "last_used": "14:00:27"
+    },
+    "nvidia_llama": {
+      "requests": 3,
+      "tokens": 6000,
+      "errors": 0,
+      "last_used": "13:47:22"
+    }
+  }
+}
