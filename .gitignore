@@ -1,6 +1,7 @@
 env/ 
 __pycache__/ 
 output/ 
+uploads/
 .env
 *.pyc 
-config.json 
+config.json

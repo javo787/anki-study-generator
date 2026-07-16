@@ -23,7 +23,9 @@ DEFAULT_CONFIG = {
     "groq_api_key":       "",
     "openrouter_api_key": "",
     "cerebras_api_key":   "",
-    "nvidia_api_key":     "",
+    "nvidia_api_key":     "",   # was used by pipeline.py's client builder but
+                                # never had a default here or a settings UI
+                                # field — added so it's actually manageable.
     "default_lang":       "en",
     "default_format":     "both",
     "chunk_size":         6000,

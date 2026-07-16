@@ -36,6 +36,7 @@ from generator import (
 )
 from filter    import filter_cards, get_kept_cards
 from quality   import improve_cards, score_cards
+from format_pass import format_cards
 from usage     import record, is_available, print_usage, get_all_usage
 from config    import load_config
 
@@ -140,14 +141,19 @@ def _safe_name(text: str) -> str:
     ).strip().replace(" ", "_")
 
 
-def save_cards(cards: list[dict], deck: str) -> str:
+def save_cards(cards: list[dict], deck: str, filename_suffix: str = "") -> str:
     """
     Save cards to output folder in Anki import format.
     Handles both Basic and Cloze note types in one file.
+
+    filename_suffix: optional tag appended to the filename only (e.g. "RAW")
+    — the #deck: header always uses the clean `deck` name so the file still
+    imports into the right Anki deck if opened directly.
     """
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     date_str = datetime.now().strftime("%Y-%m-%d_%H-%M")
-    filename = os.path.join(OUTPUT_DIR, f"anki_{_safe_name(deck)}_{date_str}.txt")
+    suffix   = f"_{_safe_name(filename_suffix)}" if filename_suffix else ""
+    filename = os.path.join(OUTPUT_DIR, f"anki_{_safe_name(deck)}{suffix}_{date_str}.txt")
 
     basic_cards = [c for c in cards if c.get("type", "basic") == "basic"]
     cloze_cards = [c for c in cards if c.get("type") == "cloze"]
@@ -223,9 +229,10 @@ def run(config: PipelineConfig, on_progress: callable = None) -> PipelineResult:
       1. Get source (transcript or PDF)
       2. Smart chunking
       3. Topic detection per chunk
-      4. Card generation with AI fallback
+      4. Card generation with AI fallback  → saves a RAW pre-filter .txt
       5. Groq filtering (optional)
       6. Gemini Pro quality control (optional)
+      6.5. Format pass — real Anki cloze syntax, markdown → HTML (format_pass.py)
       7. Score and sort
       8. Save to file
     """
@@ -300,6 +307,17 @@ def run(config: PipelineConfig, on_progress: callable = None) -> PipelineResult:
                 on_progress  = _video_progress,
             )
 
+            # Save the raw transcript to disk — useful for research/debugging,
+            # and lets you re-run card generation later without re-transcribing.
+            os.makedirs(OUTPUT_DIR, exist_ok=True)
+            transcript_path = os.path.join(
+                OUTPUT_DIR,
+                f"transcript_{_safe_name(config.deck)}_{datetime.now().strftime('%Y-%m-%d_%H-%M')}.txt",
+            )
+            with open(transcript_path, "w", encoding="utf-8") as f:
+                f.write(transcript)
+            print(f"  💾  Transcript saved: {transcript_path}")
+
             # Step 2: split transcript into chunks by character count
             CHUNK_SIZE = 5000  # ~600 words per chunk → ~4 min of speech
             
@@ -358,6 +376,13 @@ def run(config: PipelineConfig, on_progress: callable = None) -> PipelineResult:
         on_progress({"stage": "generated", "cards": result.total_raw, "pct": 40})
 
     print(f"\n  ✅  Step 1-4 complete: {result.total_raw} raw cards\n")
+
+    # Save the raw, pre-filter cards to their own file — useful for research:
+    # lets you see exactly what the filter step is removing (and why, if you
+    # compare against the final file's card count).
+    if raw_cards:
+        raw_path = save_cards(raw_cards, config.deck, filename_suffix="RAW_prefilter")
+        print(f"  💾  Raw pre-filter cards saved: {raw_path}")
 
     # Пауза чтобы Gemini RPM лимит восстановился перед quality шагом
     if result.total_raw > 0:
@@ -442,6 +467,32 @@ def run(config: PipelineConfig, on_progress: callable = None) -> PipelineResult:
         except Exception as e:
             print(f"  ⚠️  Quality step failed: {e} — skipping")
             final_cards = filtered_cards
+
+    # ── Step 6.5: Format pass ──────────────────────────────────────────────────
+    # Fixes real Anki cloze syntax ({{c1::...}}), converts markdown to HTML,
+    # and locally validates/repairs every cloze card so a broken one can never
+    # reach the saved file — see format_pass.py for why this is a separate step.
+    if final_cards:
+        print("  🎨  STEP 6.5: Format pass\n")
+
+        if on_progress:
+            on_progress({"stage": "formatting", "pct": 90})
+
+        try:
+            final_cards, format_result = format_cards(
+                cards        = final_cards,
+                deck         = config.deck,
+                groq_api_key = cfg.get("groq_api_key", ""),
+            )
+            result.stages["format"] = {
+                "cloze_fixed":       format_result.cloze_fixed,
+                "cloze_demoted":     format_result.cloze_demoted,
+                "markdown_stripped": format_result.markdown_stripped,
+            }
+            print(f"\n  ✅  Step 6.5 complete\n")
+        except Exception as e:
+            print(f"  ⚠️  Format step failed: {e} — skipping")
+            errors.append(f"Format: {e}")
 
     # ── Step 7: Score and sort ─────────────────────────────────────────────────
     final_cards = score_cards(final_cards)

@@ -38,6 +38,10 @@ CARD QUALITY RULES:
 6. You are processing chunk {chunk_index} of {chunk_total} — do NOT repeat cards from previous chunks
 7. Topic of this chunk: {topic}
 8. Minimum 15 cards, maximum 35 cards per chunk
+9. FORMATTING: use HTML only, never markdown (no **bold**, use <b>bold</b>)
+10. For "type": "cloze" cards, "front" MUST contain real Anki cloze syntax
+    {{{{c1::answer}}}} — NEVER "___" placeholders. Anki only creates a card
+    for each {{{{cN::...}}}} it finds in the text; without it, no card is made at all.
 
 OUTPUT: JSON only — no markdown fences, no explanation, no preamble.
 
@@ -45,13 +49,13 @@ OUTPUT: JSON only — no markdown fences, no explanation, no preamble.
   "cards": [
     {{
       "front": "What are the three layers of the meninges from outside to inside?",
-      "back": "• Dura mater\\n• Arachnoid mater\\n• Pia mater\\n💡 DAP — Dura, Arachnoid, Pia",
+      "back": "• Dura mater\\n• Arachnoid mater\\n• Pia mater\\n💡 Mnemonic: <b>DAP</b> — Dura, Arachnoid, Pia",
       "type": "basic",
       "tags": ["neuroanatomy", "meninges"]
     }},
     {{
-      "front": "The ___ is the outermost layer of the meninges. (Dura mater)",
-      "back": "Dura mater\\n💡 Dura = hard in Latin — it is the toughest layer",
+      "front": "What is the outermost layer of the meninges?<br><br>{{{{c1::Dura mater}}}}",
+      "back": "💡 Dura = hard in Latin — it is the toughest layer",
       "type": "cloze",
       "tags": ["neuroanatomy", "meninges"]
     }}

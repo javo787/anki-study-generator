@@ -1,6 +1,6 @@
 from anki_gen import generate_cards, build_client
 from config import load_config
- 
+
 cfg = load_config()
 client = build_client(cfg["gemini_api_key"])
  
