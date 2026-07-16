@@ -479,6 +479,61 @@ function showPage(name, el) {
   if (name === 'settings') loadSettings();
 }
 
+// ── VIDEO UPLOAD ───────────────────────────────────────────────────────────────
+// Browsers never expose a picked file's real local path (security restriction),
+// so instead of trying to fake a path, we actually upload the file's bytes to
+// the local server and use the real server-side path it hands back.
+const VIDEO_EXTS = ['.flv', '.mp4', '.mkv', '.avi', '.mov', '.mp3', '.wav', '.m4a', '.ogg', '.webm'];
+
+async function uploadVideoFile(file) {
+  const nameLabel = document.getElementById('videoDropFileName');
+  const pathInput = document.getElementById('videoPath');
+  const ext = '.' + (file.name.split('.').pop() || '').toLowerCase();
+
+  if (!VIDEO_EXTS.includes(ext)) {
+    nameLabel.style.color = '#e06666';
+    nameLabel.textContent = `Unsupported file type: ${ext}`;
+    return;
+  }
+
+  pathInput.value    = '';
+  pathInput.disabled = true;
+  nameLabel.style.color = '#8ab0f8';
+  nameLabel.textContent = `Uploading ${file.name}...`;
+
+  try {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const res  = await fetch('/api/upload/video', { method: 'POST', body: formData });
+    const data = await res.json();
+
+    if (!res.ok || data.error) throw new Error(data.error || 'Upload failed.');
+
+    pathInput.value       = data.path;
+    nameLabel.style.color = '#8ab0f8';
+    nameLabel.textContent = `✅ ${data.original_name} (${data.size_mb} MB) ready`;
+  } catch (err) {
+    nameLabel.style.color = '#e06666';
+    nameLabel.textContent = `Upload failed: ${err.message}`;
+  } finally {
+    pathInput.disabled = false;
+  }
+}
+
+function handleVideoFileSelect(event) {
+  const file = event.target.files[0];
+  if (file) uploadVideoFile(file);
+  event.target.value = ''; // allow re-selecting the same file later
+}
+
+function handleVideoDrop(event) {
+  event.preventDefault();
+  document.getElementById('videoDropZone').classList.remove('drag-over');
+  const file = event.dataTransfer.files[0];
+  if (file) uploadVideoFile(file);
+}
+
 // ── SOURCE ─────────────────────────────────────────────────────────────────────
 function selectSource(type) {
   currentSource = type;

@@ -9,6 +9,7 @@ Requires: pip install flask flask-cors
 import os
 import sys
 import json
+import uuid
 import threading
 import webbrowser
 from datetime import datetime
@@ -18,6 +19,7 @@ from datetime import datetime
 try:
     from flask import Flask, request, jsonify, send_file
     from flask_cors import CORS
+    from werkzeug.utils import secure_filename
 except ImportError:
     sys.exit("❌  Run: pip install flask flask-cors")
 
@@ -43,9 +45,61 @@ DEFAULT_CONFIG = {
 
 app  = Flask(__name__)
 CORS(app)
+app.config["MAX_CONTENT_LENGTH"] = 2048 * 1024 * 1024  # 2 GB ceiling for lecture videos
 
 # Progress state per session
 _progress_store = {}
+
+# ── UPLOADS ────────────────────────────────────────────────────────────────────
+
+UPLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+ALLOWED_VIDEO_EXTS = {".flv", ".mp4", ".mkv", ".avi", ".mov", ".mp3", ".wav", ".m4a", ".ogg", ".webm"}
+
+
+def _is_temp_upload(path: str) -> bool:
+    """True if this path lives inside our uploads folder (safe to delete after use)."""
+    try:
+        return os.path.dirname(os.path.abspath(path)) == UPLOAD_DIR
+    except Exception:
+        return False
+
+
+@app.route("/api/upload/video", methods=["POST"])
+def route_upload_video():
+    """
+    Real file upload for the browser drop-zone / file picker.
+    Browsers never expose the true local path of a picked file (security
+    restriction), so instead we accept the file's bytes here, save it under
+    a random name in UPLOAD_DIR, and hand back the real server-side path
+    that /api/generate/video can use.
+    """
+    if "file" not in request.files:
+        return jsonify({"error": "No file provided."}), 400
+
+    file = request.files["file"]
+    if not file.filename:
+        return jsonify({"error": "No file selected."}), 400
+
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in ALLOWED_VIDEO_EXTS:
+        return jsonify({"error": f"Unsupported file type: {ext}"}), 400
+
+    safe_name = f"{uuid.uuid4().hex}{ext}"
+    save_path = os.path.join(UPLOAD_DIR, safe_name)
+
+    try:
+        file.save(save_path)
+    except Exception as e:
+        return jsonify({"error": f"Could not save upload: {e}"}), 500
+
+    return jsonify({
+        "ok":            True,
+        "path":          os.path.abspath(save_path),
+        "original_name": secure_filename(file.filename),
+        "size_mb":       round(os.path.getsize(save_path) / (1024 * 1024), 1),
+    })
 
 # ── CONFIG ─────────────────────────────────────────────────────────────────────
 
@@ -196,6 +250,8 @@ def route_video():
     def on_progress(info: dict):
         _progress_store[session_id] = info
 
+    cleanup_after = _is_temp_upload(video_path)
+
     try:
         result = run_video(
             path        = video_path,
@@ -220,6 +276,12 @@ def route_video():
         import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+    finally:
+        if cleanup_after and os.path.exists(video_path):
+            try:
+                os.remove(video_path)
+            except OSError:
+                pass
 
 # ── ROUTES — PROGRESS ──────────────────────────────────────────────────────────
 
