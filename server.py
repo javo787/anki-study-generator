@@ -8,7 +8,6 @@ Requires: pip install flask flask-cors
 
 import os
 import sys
-import json
 import uuid
 import threading
 import webbrowser
@@ -23,25 +22,14 @@ try:
 except ImportError:
     sys.exit("❌  Run: pip install flask flask-cors")
 
-from pipeline import run_youtube, run_pdf, run_video, PipelineConfig, load_config, save_cards
+from pipeline import run_youtube, run_pdf, run_video, PipelineConfig, save_cards
 from usage    import get_all_usage, reset_usage, print_usage
+from config   import load_config, save_config, mask_key
 
 # ── CONSTANTS ──────────────────────────────────────────────────────────────────
 
-CONFIG_FILE = "config.json"
 OUTPUT_DIR  = "output"
 PORT        = 5000
-
-DEFAULT_CONFIG = {
-    "gemini_api_key":     "",
-    "gemini_pro_key":     "",
-    "groq_api_key":       "",
-    "openrouter_api_key": "",
-    "cerebras_api_key":   "",
-    "default_lang":       "en",
-    "default_format":     "both",
-    "chunk_size":         6000,
-}
 
 app  = Flask(__name__)
 CORS(app)
@@ -56,6 +44,7 @@ UPLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 ALLOWED_VIDEO_EXTS = {".flv", ".mp4", ".mkv", ".avi", ".mov", ".mp3", ".wav", ".m4a", ".ogg", ".webm"}
+ALLOWED_PDF_EXTS   = {".pdf"}
 
 
 def _is_temp_upload(path: str) -> bool:
@@ -66,14 +55,13 @@ def _is_temp_upload(path: str) -> bool:
         return False
 
 
-@app.route("/api/upload/video", methods=["POST"])
-def route_upload_video():
+def _handle_upload(allowed_exts: set):
     """
-    Real file upload for the browser drop-zone / file picker.
+    Shared real-file-upload handler for both video and PDF drop-zones.
     Browsers never expose the true local path of a picked file (security
-    restriction), so instead we accept the file's bytes here, save it under
-    a random name in UPLOAD_DIR, and hand back the real server-side path
-    that /api/generate/video can use.
+    restriction), so we accept the file's bytes here, save it under a random
+    name in UPLOAD_DIR, and hand back the real server-side path that the
+    generate routes can use.
     """
     if "file" not in request.files:
         return jsonify({"error": "No file provided."}), 400
@@ -83,7 +71,7 @@ def route_upload_video():
         return jsonify({"error": "No file selected."}), 400
 
     ext = os.path.splitext(file.filename)[1].lower()
-    if ext not in ALLOWED_VIDEO_EXTS:
+    if ext not in allowed_exts:
         return jsonify({"error": f"Unsupported file type: {ext}"}), 400
 
     safe_name = f"{uuid.uuid4().hex}{ext}"
@@ -101,17 +89,17 @@ def route_upload_video():
         "size_mb":       round(os.path.getsize(save_path) / (1024 * 1024), 1),
     })
 
+
+@app.route("/api/upload/video", methods=["POST"])
+def route_upload_video():
+    return _handle_upload(ALLOWED_VIDEO_EXTS)
+
+
+@app.route("/api/upload/pdf", methods=["POST"])
+def route_upload_pdf():
+    return _handle_upload(ALLOWED_PDF_EXTS)
+
 # ── CONFIG ─────────────────────────────────────────────────────────────────────
-
-def _save_config(cfg: dict):
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, indent=2, ensure_ascii=False)
-
-
-def _mask_key(key: str) -> str:
-    if not key:
-        return ""
-    return "*" * (len(key) - 4) + key[-4:]
 
 # ── ROUTES — CONFIG ────────────────────────────────────────────────────────────
 
@@ -120,13 +108,14 @@ def route_get_config():
     cfg  = load_config()
     safe = {}
     for k, v in cfg.items():
-        safe[k] = _mask_key(v) if "key" in k and v else v
+        safe[k] = mask_key(v) if "key" in k and v else v
     safe["keys_set"] = {
         "gemini_flash": bool(cfg.get("gemini_api_key")),
         "gemini_pro":   bool(cfg.get("gemini_pro_key")),
         "groq":         bool(cfg.get("groq_api_key")),
         "openrouter":   bool(cfg.get("openrouter_api_key")),
         "cerebras":     bool(cfg.get("cerebras_api_key")),
+        "nvidia":       bool(cfg.get("nvidia_api_key")),
     }
     return jsonify(safe)
 
@@ -136,14 +125,14 @@ def route_post_config():
     data = request.json or {}
     cfg  = load_config()
     fields = [
-        "gemini_api_key", "gemini_pro_key",
-        "groq_api_key", "openrouter_api_key", "cerebras_api_key",
+        "gemini_api_key", "gemini_pro_key", "groq_api_key",
+        "openrouter_api_key", "cerebras_api_key", "nvidia_api_key",
         "default_lang", "default_format", "chunk_size",
     ]
     for field in fields:
         if field in data and data[field]:
             cfg[field] = data[field]
-    _save_config(cfg)
+    save_config(cfg)
     return jsonify({"ok": True})
 
 # ── ROUTES — GENERATE ──────────────────────────────────────────────────────────
@@ -206,6 +195,8 @@ def route_pdf():
     def on_progress(info: dict):
         _progress_store[session_id] = info
 
+    cleanup_after = _is_temp_upload(pdf_path)
+
     try:
         result = run_pdf(
             path        = pdf_path,
@@ -232,6 +223,12 @@ def route_pdf():
         import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+    finally:
+        if cleanup_after and os.path.exists(pdf_path):
+            try:
+                os.remove(pdf_path)
+            except OSError:
+                pass
 
 
 @app.route("/api/generate/video", methods=["POST"])

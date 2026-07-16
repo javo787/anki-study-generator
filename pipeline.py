@@ -6,7 +6,6 @@ Connects: chunker → generator → filter → quality → output
 import os
 import re
 import sys
-import json
 import time
 from datetime import datetime
 from dataclasses import dataclass, field
@@ -38,22 +37,11 @@ from generator import (
 from filter    import filter_cards, get_kept_cards
 from quality   import improve_cards, score_cards
 from usage     import record, is_available, print_usage, get_all_usage
+from config    import load_config
 
 # ── CONSTANTS ──────────────────────────────────────────────────────────────────
 
-CONFIG_FILE = "config.json"
 OUTPUT_DIR  = "output"
-
-DEFAULT_CONFIG = {
-    "gemini_api_key":     "",
-    "gemini_pro_key":     "",
-    "groq_api_key":       "",
-    "openrouter_api_key": "",
-    "cerebras_api_key":   "",
-    "default_lang":       "en",
-    "default_format":     "both",
-    "chunk_size":         6000,
-}
 
 # ── DATA CLASSES ───────────────────────────────────────────────────────────────
 
@@ -92,15 +80,6 @@ class PipelineResult:
             f"   Final cards:    {self.total_final}\n"
             f"   Saved to:       {self.filename}"
         )
-
-
-# ── CONFIG ─────────────────────────────────────────────────────────────────────
-
-def load_config() -> dict:
-    if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-            return {**DEFAULT_CONFIG, **json.load(f)}
-    return DEFAULT_CONFIG.copy()
 
 
 # ── CLIENT BUILDER ─────────────────────────────────────────────────────────────

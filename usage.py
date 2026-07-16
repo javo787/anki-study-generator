@@ -11,7 +11,6 @@ from dataclasses import dataclass, field
 
 # ── CONSTANTS ──────────────────────────────────────────────────────────────────
 
-CONFIG_FILE = "config.json"
 USAGE_FILE  = "usage.json"
 
 # Daily free tier limits

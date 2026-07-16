@@ -5,34 +5,14 @@ Run: python main.py
 
 import os
 import sys
-import json
 from datetime import datetime
+
+from config import load_config, save_config, mask_key
 
 # ── CONSTANTS ──────────────────────────────────────────────────────────────────
 
-CONFIG_FILE = "config.json"
 OUTPUT_DIR  = "output"
 VERSION     = "1.0"
-
-DEFAULT_CONFIG = {
-    "gemini_api_key": "",
-    "default_lang":   "en",
-    "default_format": "both",
-    "chunk_size":     6000,
-}
-
-# ── CONFIG ─────────────────────────────────────────────────────────────────────
-
-def load_config() -> dict:
-    if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-            return {**DEFAULT_CONFIG, **json.load(f)}
-    return DEFAULT_CONFIG.copy()
-
-
-def save_config(cfg: dict):
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, indent=2, ensure_ascii=False)
 
 # ── UI HELPERS ─────────────────────────────────────────────────────────────────
 
@@ -51,12 +31,6 @@ def status_line(cfg: dict):
     key = "✅ set" if cfg["gemini_api_key"] else "⚠️  not set"
     print(f"  API key: {key}  │  Lang: {cfg['default_lang']}  │  Format: {cfg['default_format']}")
     print()
-
-
-def mask_key(key: str) -> str:
-    if not key:
-        return "(not set)"
-    return "*" * (len(key) - 4) + key[-4:]
 
 
 def ask(prompt: str, default: str = "") -> str:

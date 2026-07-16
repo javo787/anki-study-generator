@@ -1,0 +1,23 @@
+# Anki Card Generator — dependencies
+# Install with: pip install -r requirements.txt
+#
+# ffmpeg is also required for the "Local video" feature (video_gen.py) but is
+# a system tool, not a Python package:
+#   Windows: winget install ffmpeg
+#   macOS:   brew install ffmpeg
+#   Linux:   sudo apt install ffmpeg
+ 
+# Web server (server.py + index.html)
+flask>=3.1
+flask-cors>=6.0
+werkzeug>=3.1
+ 
+# AI providers
+google-genai>=0.3        # Gemini Flash / Gemini Pro
+groq>=0.11                # Groq Llama + Whisper transcription
+openai>=1.0                # OpenRouter and NVIDIA clients (OpenAI-compatible APIs)
+ 
+# Content extraction
+youtube-transcript-api>=0.6   # YouTube auto-transcript
+pdfplumber>=0.11               # PDF text extraction
+ 

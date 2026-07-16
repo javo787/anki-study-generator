@@ -177,6 +177,7 @@ def transcribe_local_video(
 
         # ── Step 3: Transcribe each chunk ──────────────────────────────────────
         transcripts = []
+        failed_chunks = []
         for i, chunk_path in enumerate(chunks, 1):
             chunk_mb = _file_mb(chunk_path)
             print(f"  🎙️   Transcribing chunk {i}/{len(chunks)} ({chunk_mb:.1f} MB)...", end=" ", flush=True)
@@ -190,7 +191,9 @@ def transcribe_local_video(
                 print(f"{len(text.split())} words")
             except Exception as e:
                 print(f"failed ({e})")
-                # Don't stop — continue with other chunks
+                failed_chunks.append(i)
+                # Don't stop — other chunks may still succeed, but we surface
+                # exactly which parts of the lecture are missing at the end.
 
             # Small pause between requests
             if i < len(chunks):
@@ -199,8 +202,13 @@ def transcribe_local_video(
         if not transcripts:
             raise RuntimeError("All chunks failed to transcribe.")
 
+        if failed_chunks:
+            print(f"\n  ⚠️   {len(failed_chunks)}/{len(chunks)} chunk(s) failed and are MISSING "
+                  f"from the transcript: parts {failed_chunks}")
+
         full_transcript = " ".join(transcripts)
-        print(f"\n  ✅  Transcript: {len(full_transcript):,} characters")
+        print(f"\n  ✅  Transcript: {len(full_transcript):,} characters"
+              + (f" ({len(failed_chunks)} part(s) missing)" if failed_chunks else ""))
 
         if on_progress:
             on_progress(len(chunks) + 2, len(chunks) + 2, "Transcription complete")
@@ -225,16 +233,12 @@ if __name__ == "__main__":
         print("Example: python video_gen.py lecture.flv en")
         sys.exit(1)
 
-    cfg_path = "config.json"
-    if not os.path.exists(cfg_path):
-        sys.exit("❌  config.json not found")
+    from config import load_config
 
-    with open(cfg_path) as f:
-        cfg = json.load(f)
-
+    cfg = load_config()
     groq_key = cfg.get("groq_api_key", "")
     if not groq_key:
-        sys.exit("❌  groq_api_key not set in config.json")
+        sys.exit("❌  groq_api_key not set. Run: python main.py → Settings, or set it in the web UI.")
 
     video  = sys.argv[1]
     lang   = sys.argv[2] if len(sys.argv) > 2 else "en"

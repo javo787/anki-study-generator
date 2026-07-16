@@ -466,6 +466,7 @@ const KEY_DEFS = [
   { key: 'groq_api_key',       label: 'Groq Llama',    placeholder: 'gsk_...' },
   { key: 'openrouter_api_key', label: 'OpenRouter',    placeholder: 'sk-or-...' },
   { key: 'cerebras_api_key',   label: 'Cerebras',      placeholder: 'csk-...' },
+  { key: 'nvidia_api_key',     label: 'NVIDIA',        placeholder: 'nvapi-...' },
 ];
 
 // ── NAV ────────────────────────────────────────────────────────────────────────
@@ -477,6 +478,59 @@ function showPage(name, el) {
   if (name === 'files')    loadFiles();
   if (name === 'usage')    loadUsage();
   if (name === 'settings') loadSettings();
+}
+
+// ── PDF UPLOAD ─────────────────────────────────────────────────────────────────
+// Same real-upload pattern as video (see VIDEO UPLOAD below): a browser can't
+// hand back a real local file path, so we upload the bytes and use the path
+// the server gives back.
+async function uploadPdfFile(file) {
+  const nameLabel = document.getElementById('dropFileName');
+  const pathInput = document.getElementById('pdfPath');
+  const ext = '.' + (file.name.split('.').pop() || '').toLowerCase();
+
+  if (ext !== '.pdf') {
+    nameLabel.style.color = '#e06666';
+    nameLabel.textContent = `Unsupported file type: ${ext}`;
+    return;
+  }
+
+  pathInput.value    = '';
+  pathInput.disabled = true;
+  nameLabel.style.color = '#8ab0f8';
+  nameLabel.textContent = `Uploading ${file.name}...`;
+
+  try {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const res  = await fetch('/api/upload/pdf', { method: 'POST', body: formData });
+    const data = await res.json();
+
+    if (!res.ok || data.error) throw new Error(data.error || 'Upload failed.');
+
+    pathInput.value       = data.path;
+    nameLabel.style.color = '#8ab0f8';
+    nameLabel.textContent = `✅ ${data.original_name} (${data.size_mb} MB) ready`;
+  } catch (err) {
+    nameLabel.style.color = '#e06666';
+    nameLabel.textContent = `Upload failed: ${err.message}`;
+  } finally {
+    pathInput.disabled = false;
+  }
+}
+
+function handleFileSelect(event) {
+  const file = event.target.files[0];
+  if (file) uploadPdfFile(file);
+  event.target.value = '';
+}
+
+function handleDrop(event) {
+  event.preventDefault();
+  document.getElementById('dropZone').classList.remove('drag-over');
+  const file = event.dataTransfer.files[0];
+  if (file) uploadPdfFile(file);
 }
 
 // ── VIDEO UPLOAD ───────────────────────────────────────────────────────────────
