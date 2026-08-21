@@ -14,6 +14,12 @@ try:
 except ImportError:
     sys.exit("❌  Run: pip install google-genai")
 
+try:
+    from anki_gen import build_language_instruction
+except ImportError:
+    def build_language_instruction(lang: str) -> str:   # pragma: no cover — fallback if run standalone
+        return "Write every \"front\" and \"back\" field in English."
+
 GEMINI_PRO_MODEL   = "gemini-2.5-pro"
 GEMINI_FLASH_MODEL = "gemini-2.5-flash"
 QUALITY_BATCH      = 20
@@ -52,6 +58,9 @@ Your tasks for EACH card:
    note with no {{cN::...}} markup, so a "___" card is silently dead.
 5. FORMATTING — HTML only, never markdown (no **bold**, use <b>bold</b>
    instead) — the output is rendered as raw HTML.
+6. LANGUAGE — {language_instruction} This applies to any text you add or
+   rewrite too: a new mnemonic must be written in that same language/script,
+   not English by default.
 
 IMPORTANT:
 - Do NOT remove cards
@@ -74,12 +83,15 @@ OUTPUT: JSON only — no markdown.
 }"""
 
 
-def _process_batch(cards, deck, client, model):
+def _process_batch(cards, deck, client, model, lang="en"):
     prompt = (
         f"Review and improve these {len(cards)} Anki cards.\n"
         f"Deck: {deck}\n\n"
         f"Cards:\n{json.dumps(cards, indent=2, ensure_ascii=False)}\n\n"
         f"Return improved cards as JSON only."
+    )
+    system_instruction = QUALITY_SYSTEM.format(
+        language_instruction=build_language_instruction(lang)
     )
 
     for attempt in range(1, MAX_RETRY + 1):
@@ -88,7 +100,7 @@ def _process_batch(cards, deck, client, model):
                 model    = model,
                 contents = prompt,
                 config   = {
-                    "system_instruction": QUALITY_SYSTEM,
+                    "system_instruction": system_instruction,
                     "temperature":        0.4,
                 },
             )
@@ -136,6 +148,7 @@ def improve_cards(
     deck:    str,
     api_key: str  = "",
     use_pro: bool = True,
+    lang:    str  = "en",
 ) -> tuple:
     if not cards:
         return [], QualityResult(cards_in=0, cards_out=0)
@@ -170,7 +183,7 @@ def improve_cards(
 
         print(f"  🔄  Quality batch {i}/{len(batches)}...", end=" ", flush=True)
         try:
-            improved, mnemonics, phrasing = _process_batch(batch, deck, client, model)
+            improved, mnemonics, phrasing = _process_batch(batch, deck, client, model, lang)
             model_used = model
         except RuntimeError as e:
             if use_pro:
@@ -178,7 +191,7 @@ def improve_cards(
                 model      = GEMINI_FLASH_MODEL
                 model_used = model
                 try:
-                    improved, mnemonics, phrasing = _process_batch(batch, deck, client, model)
+                    improved, mnemonics, phrasing = _process_batch(batch, deck, client, model, lang)
                 except Exception as e2:
                     print(f"skipped ({e2.__class__.__name__})")
                     improved, mnemonics, phrasing = batch, 0, 0
@@ -207,7 +220,17 @@ def improve_cards(
     return all_improved, result
 
 
-def score_cards(cards: list) -> list:
+_SPECIFIC_QUESTION_WORDS = {
+    "en": ["which", "where", "name", "list", "what are"],
+    "ru": ["какой", "какая", "какие", "где", "перечисли", "назовите", "сколько"],
+    "de": ["welche", "welcher", "wo", "nenne", "nennen sie", "wie viele"],
+    "uz": ["qaysi", "қайси", "qayerda", "қаерда", "sanab", "санаб", "nechta", "нечта"],
+}
+
+
+def score_cards(cards: list, lang: str = "en") -> list:
+    question_words = _SPECIFIC_QUESTION_WORDS.get((lang or "en").lower(), _SPECIFIC_QUESTION_WORDS["en"])
+
     def _score(card: dict) -> int:
         score = 0
         front = card.get("front", "") or ""
@@ -219,7 +242,7 @@ def score_cards(cards: list) -> list:
         if isinstance(front, list):
             front = " ".join(str(x) for x in front)
         
-        if any(w in front.lower() for w in ["which", "where", "name", "list", "what are"]):
+        if any(w in front.lower() for w in question_words):
             score += 2
         if "💡" in back:
             score += 3

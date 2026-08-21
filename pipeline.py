@@ -276,6 +276,7 @@ def run(config: PipelineConfig, on_progress: callable = None) -> PipelineResult:
                 clients       = clients,
                 detect_topics = config.detect_topics,
                 on_progress   = _progress,
+                lang          = config.lang,
             )
         elif config.source == "pdf":
             gen_result = generate_from_pdf(
@@ -286,6 +287,7 @@ def run(config: PipelineConfig, on_progress: callable = None) -> PipelineResult:
                 page_to       = config.page_to,
                 detect_topics = config.detect_topics,
                 on_progress   = _progress,
+                lang          = config.lang,
             )
         elif config.source == "video":
             from video_gen import transcribe_local_video
@@ -353,7 +355,7 @@ def run(config: PipelineConfig, on_progress: callable = None) -> PipelineResult:
             print(f"  📦  {len(chunks)} chunks from video transcript")
 
             from generator import _run_pipeline
-            gen_result = _run_pipeline(chunks, config.deck, clients, config.detect_topics, _progress)
+            gen_result = _run_pipeline(chunks, config.deck, clients, config.detect_topics, _progress, config.lang)
 
     except Exception as e:
         raise RuntimeError(f"Generation failed: {e}")
@@ -439,6 +441,7 @@ def run(config: PipelineConfig, on_progress: callable = None) -> PipelineResult:
                 deck    = config.deck,
                 api_key = cfg["gemini_pro_key"],
                 use_pro = True,
+                lang    = config.lang,
             )
             record("gemini_pro", tokens=len(filtered_cards) * 200)
 
@@ -463,6 +466,7 @@ def run(config: PipelineConfig, on_progress: callable = None) -> PipelineResult:
                 deck    = config.deck,
                 api_key = cfg["gemini_api_key"],
                 use_pro = False,
+                lang    = config.lang,
             )
         except Exception as e:
             print(f"  ⚠️  Quality step failed: {e} — skipping")
@@ -483,11 +487,13 @@ def run(config: PipelineConfig, on_progress: callable = None) -> PipelineResult:
                 cards        = final_cards,
                 deck         = config.deck,
                 groq_api_key = cfg.get("groq_api_key", ""),
+                lang         = config.lang,
             )
             result.stages["format"] = {
                 "cloze_fixed":       format_result.cloze_fixed,
                 "cloze_demoted":     format_result.cloze_demoted,
                 "markdown_stripped": format_result.markdown_stripped,
+                "uz_transliterated": format_result.uz_transliterated,
             }
             print(f"\n  ✅  Step 6.5 complete\n")
         except Exception as e:
@@ -495,7 +501,7 @@ def run(config: PipelineConfig, on_progress: callable = None) -> PipelineResult:
             errors.append(f"Format: {e}")
 
     # ── Step 7: Score and sort ─────────────────────────────────────────────────
-    final_cards = score_cards(final_cards)
+    final_cards = score_cards(final_cards, lang=config.lang)
 
     # ── Step 8: Save ───────────────────────────────────────────────────────────
     filename = save_cards(final_cards, config.deck)

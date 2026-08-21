@@ -30,6 +30,7 @@ try:
         generate_cards as gemini_generate,
         deduplicate,
         build_client as build_gemini,
+        build_language_instruction,
     )
 except ImportError:
     sys.exit("❌  anki_gen.py not found in the same directory")
@@ -45,6 +46,21 @@ TOPIC_PROMPT = """\
 In 4-6 words, name the main anatomical or medical topic of this text.
 Examples: "CSF circulation and drainage", "Brachial plexus roots", "Heart valve anatomy"
 Reply with the topic only — no punctuation, no explanation."""
+
+
+def _transcript_language_priority(lang: str) -> list[str]:
+    """
+    Which YouTube caption track(s) to look for, in priority order, for a
+    given "Card language" choice. A native transcript in the target
+    language gives the model real source material instead of making it
+    translate mid-generation, so we ask for that first and fall back to
+    English (get_transcript_entries falls back further still — see
+    anki_gen.py — including translating whatever track IS available).
+    """
+    lang = (lang or "en").lower()
+    if lang == "en":
+        return ["en"]
+    return [lang, "en"]
 
 # ── DATA CLASSES ───────────────────────────────────────────────────────────────
 
@@ -174,6 +190,7 @@ RULES:
 5. Cloze format: "The ___ is the outermost meninges layer. (Dura mater)"
 6. Minimum 15, maximum 35 cards
 7. Topic: {topic} | Chunk {chunk_index} of {chunk_total}
+8. LANGUAGE: {language_instruction}
 
 OUTPUT: JSON only — no markdown, no explanation.
 {{"cards": [{{"front": "...", "back": "...", "type": "basic", "tags": ["..."]}}]}}"""
@@ -197,12 +214,13 @@ def _parse_response(raw: str) -> list[dict]:
 
     return []
 
-def _generate_with_groq(chunk: Chunk, deck: str, ai: AIClient) -> list[dict]:
+def _generate_with_groq(chunk: Chunk, deck: str, ai: AIClient, lang: str = "en") -> list[dict]:
     """Generate cards using Groq API."""
     system = GROQ_CARD_PROMPT.format(
         topic=chunk.topic_hint or "general",
         chunk_index=chunk.index,
         chunk_total=chunk.total,
+        language_instruction=build_language_instruction(lang),
     )
     prompt = (
         f"Deck: {deck}\n\n"
@@ -225,12 +243,13 @@ def _generate_with_groq(chunk: Chunk, deck: str, ai: AIClient) -> list[dict]:
         raise RuntimeError(f"Groq error: {e}")
 
 
-def _generate_with_openrouter(chunk: Chunk, deck: str, ai: AIClient) -> list[dict]:
+def _generate_with_openrouter(chunk: Chunk, deck: str, ai: AIClient, lang: str = "en") -> list[dict]:
     """Generate cards using OpenRouter API (OpenAI-compatible)."""
     system = GROQ_CARD_PROMPT.format(
         topic=chunk.topic_hint or "general",
         chunk_index=chunk.index,
         chunk_total=chunk.total,
+        language_instruction=build_language_instruction(lang),
     )
     prompt = (
         f"Deck: {deck}\n\n"
@@ -257,6 +276,7 @@ def generate_chunk(
     chunk:   Chunk,
     deck:    str,
     clients: list[AIClient],
+    lang:    str = "en",
 ) -> tuple[list[dict], str]:
 
     sorted_clients   = sorted(clients, key=lambda c: c.priority)
@@ -276,6 +296,7 @@ def generate_chunk(
                     chunk_index = chunk.index,
                     chunk_total = chunk.total,
                     topic       = chunk.topic_hint or "general",
+                    lang        = lang,
                 )
                 if cards:
                     return cards, ai.name
@@ -310,9 +331,9 @@ def generate_chunk(
     for ai in fallback_clients:
         try:
             if ai.provider in ("openrouter", "nvidia"):
-                cards = _generate_with_openrouter(chunk, deck, ai)
+                cards = _generate_with_openrouter(chunk, deck, ai, lang)
             elif ai.provider == "groq":
-                cards = _generate_with_groq(chunk, deck, ai)
+                cards = _generate_with_groq(chunk, deck, ai, lang)
             else:
                 continue
 
@@ -340,6 +361,7 @@ def generate_from_youtube(
     clients:        list[AIClient],
     detect_topics:  bool = True,
     on_progress:    callable = None,
+    lang:           str = "en",
 ) -> GenerationResult:
     """
     Full pipeline: YouTube URL → smart chunks → cards.
@@ -350,16 +372,20 @@ def generate_from_youtube(
         clients:       list of AIClient (sorted by priority internally)
         detect_topics: whether to auto-detect topic per chunk
         on_progress:   optional callback(chunk, total, status_str)
+        lang:          output card language — also picks which caption
+                       track(s) get requested first (see
+                       _transcript_language_priority)
     """
-    # Step 1: transcript
+    # Step 1: transcript — prefer a native track in the target language,
+    # anki_gen.get_transcript_entries() falls back from there if needed.
     video_id = extract_video_id(url)
-    entries  = get_transcript_entries(video_id)
+    entries  = get_transcript_entries(video_id, languages=_transcript_language_priority(lang))
 
     # Step 2: smart chunking
     chunks = chunk_youtube(entries)
     print(f"  📦  {len(chunks)} chunks from transcript")
 
-    return _run_pipeline(chunks, deck, clients, detect_topics, on_progress)
+    return _run_pipeline(chunks, deck, clients, detect_topics, on_progress, lang)
 
 
 def generate_from_pdf(
@@ -370,6 +396,7 @@ def generate_from_pdf(
     page_to:        int = 99999,
     detect_topics:  bool = True,
     on_progress:    callable = None,
+    lang:           str = "en",
 ) -> GenerationResult:
     """
     Full pipeline: PDF → smart chunks → cards.
@@ -378,7 +405,7 @@ def generate_from_pdf(
     chunks = chunk_pdf(path, page_from, page_to)
     print(f"  📦  {len(chunks)} chunks from PDF")
 
-    return _run_pipeline(chunks, deck, clients, detect_topics, on_progress)
+    return _run_pipeline(chunks, deck, clients, detect_topics, on_progress, lang)
 
 
 def _run_pipeline(
@@ -387,6 +414,7 @@ def _run_pipeline(
     clients:        list[AIClient],
     detect_topics:  bool,
     on_progress:    callable,
+    lang:           str = "en",
 ) -> GenerationResult:
     """Internal: run generation pipeline on a list of chunks."""
 
@@ -413,7 +441,7 @@ def _run_pipeline(
 
         # Step 4: generate cards
         print(f"  🔄  Generating chunk {chunk.index}/{chunk.total}...", end=" ", flush=True)
-        cards, provider = generate_chunk(chunk, deck, clients)
+        cards, provider = generate_chunk(chunk, deck, clients, lang)
         print(f"{len(cards)} cards [{provider}]")
 
         # Track which AI was used

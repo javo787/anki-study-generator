@@ -140,7 +140,7 @@ def route_post_config():
 @app.route("/api/generate/youtube", methods=["POST"])
 def route_youtube():
     data = request.json or {}
-    url  = data.get("url",  "").strip()
+    url  = data.get("youtube_url", "").strip()
     deck = data.get("deck", "My Deck").strip()
     lang = data.get("lang", "en")
     session_id = data.get("session_id", "default")
