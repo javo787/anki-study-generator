@@ -108,7 +108,8 @@ def route_get_config():
     cfg  = load_config()
     safe = {}
     for k, v in cfg.items():
-        safe[k] = mask_key(v) if "key" in k and v else v
+        is_secret = ("key" in k or "password" in k or "proxy" in k) and v
+        safe[k] = mask_key(v) if is_secret else v
     safe["keys_set"] = {
         "gemini_flash": bool(cfg.get("gemini_api_key")),
         "gemini_pro":   bool(cfg.get("gemini_pro_key")),
@@ -116,6 +117,7 @@ def route_get_config():
         "openrouter":   bool(cfg.get("openrouter_api_key")),
         "cerebras":     bool(cfg.get("cerebras_api_key")),
         "nvidia":       bool(cfg.get("nvidia_api_key")),
+        "youtube_proxy": bool(cfg.get("webshare_proxy_username") or cfg.get("youtube_proxy_url")),
     }
     return jsonify(safe)
 
@@ -128,6 +130,7 @@ def route_post_config():
         "gemini_api_key", "gemini_pro_key", "groq_api_key",
         "openrouter_api_key", "cerebras_api_key", "nvidia_api_key",
         "default_lang", "default_format", "chunk_size",
+        "webshare_proxy_username", "webshare_proxy_password", "youtube_proxy_url",
     ]
     for field in fields:
         if field in data and data[field]:

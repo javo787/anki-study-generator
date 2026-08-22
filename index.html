@@ -450,6 +450,35 @@ input:focus { border-color: #6c8ef5; }
         </div>
       </div>
     </div>
+
+    <div class="card">
+      <div class="card-title">YouTube proxy <span style="font-weight:400;color:#888;font-size:12px">(optional)</span></div>
+      <div class="toggle-sub" style="margin-bottom:14px">
+        YouTube blocks most cloud-hosted IPs (Codespaces, AWS, GCP, Azure) from fetching
+        transcripts. If generation fails with "YouTube is blocking requests from your IP",
+        set one of these — Webshare (residential proxies, has auto-retry built in) or any
+        other http/https proxy.
+      </div>
+
+      <div class="key-row">
+        <div class="key-label">Webshare</div>
+        <span class="key-badge unset" id="proxyBadge">Not set</span>
+      </div>
+      <div class="key-input-row">
+        <input type="text" placeholder="Webshare proxy username" id="key_webshare_proxy_username">
+        <button class="btn btn-secondary" onclick="saveKey('webshare_proxy_username')" style="padding:8px 14px;font-size:12px">Save</button>
+      </div>
+      <div class="key-input-row" style="margin-top:8px">
+        <input type="password" placeholder="Webshare proxy password" id="key_webshare_proxy_password">
+        <button class="btn btn-secondary" onclick="saveKey('webshare_proxy_password')" style="padding:8px 14px;font-size:12px">Save</button>
+      </div>
+
+      <div class="toggle-sub" style="margin:16px 0 8px">— or a generic proxy (used only if Webshare fields above are empty) —</div>
+      <div class="key-input-row">
+        <input type="password" placeholder="http://user:pass@host:port" id="key_youtube_proxy_url">
+        <button class="btn btn-secondary" onclick="saveKey('youtube_proxy_url')" style="padding:8px 14px;font-size:12px">Save</button>
+      </div>
+    </div>
   </div>
 
 </main>
@@ -920,6 +949,12 @@ async function loadSettings() {
     const chips   = document.querySelectorAll('#defLangGroup .chip');
     chips.forEach(c => c.classList.remove('active'));
     chips[langMap[cfg.default_lang] ?? 0]?.classList.add('active');
+
+    // YouTube proxy status
+    const proxyOn = keys.youtube_proxy || false;
+    const badge = document.getElementById('proxyBadge');
+    badge.textContent = proxyOn ? 'Set ✓' : 'Not set';
+    badge.className = 'key-badge ' + (proxyOn ? 'set' : 'unset');
 
   } catch(e) {}
 }

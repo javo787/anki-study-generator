@@ -362,6 +362,7 @@ def generate_from_youtube(
     detect_topics:  bool = True,
     on_progress:    callable = None,
     lang:           str = "en",
+    proxy_config=None,
 ) -> GenerationResult:
     """
     Full pipeline: YouTube URL → smart chunks → cards.
@@ -375,11 +376,18 @@ def generate_from_youtube(
         lang:          output card language — also picks which caption
                        track(s) get requested first (see
                        _transcript_language_priority)
+        proxy_config:  optional youtube_transcript_api ProxyConfig — see
+                       anki_gen.build_proxy_config(). Works around YouTube
+                       blocking cloud-provider IPs (RequestBlocked).
     """
     # Step 1: transcript — prefer a native track in the target language,
     # anki_gen.get_transcript_entries() falls back from there if needed.
     video_id = extract_video_id(url)
-    entries  = get_transcript_entries(video_id, languages=_transcript_language_priority(lang))
+    entries  = get_transcript_entries(
+        video_id,
+        languages=_transcript_language_priority(lang),
+        proxy_config=proxy_config,
+    )
 
     # Step 2: smart chunking
     chunks = chunk_youtube(entries)

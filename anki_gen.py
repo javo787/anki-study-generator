@@ -106,7 +106,50 @@ def extract_video_id(url: str) -> str:
     raise ValueError(f"Cannot extract video ID from: {url}")
 
 
-def get_transcript_entries(video_id: str, languages: list[str] | None = None) -> list[dict]:
+def build_proxy_config(cfg: dict):
+    """
+    Build a youtube_transcript_api ProxyConfig from settings, or None.
+
+    Why this exists: YouTube's (undocumented) transcript endpoint blocks
+    most cloud-provider IPs outright — GitHub Codespaces, AWS, GCP, Azure —
+    which is exactly what a RequestBlocked error means. It has nothing to
+    do with language or video content; it happens before any of that is
+    even looked at. The library's own maintainers recommend routing these
+    specific requests through a proxy (ideally rotating residential IPs)
+    rather than any code-side workaround, since there IS no code-side fix
+    for "this IP is blocked".
+
+    Webshare gets first-class support in youtube-transcript-api (retries
+    with a fresh IP from the pool on a block), so it's tried first if
+    configured. A single generic http(s) proxy URL — any provider, or a
+    proxy you run yourself — is the fallback. Neither configured -> None,
+    meaning requests go out from this machine's IP exactly as before.
+    """
+    from youtube_transcript_api.proxies import (
+        GenericProxyConfig, WebshareProxyConfig, InvalidProxyConfig,
+    )
+
+    webshare_user = (cfg.get("webshare_proxy_username") or "").strip()
+    webshare_pass = (cfg.get("webshare_proxy_password") or "").strip()
+    generic_url   = (cfg.get("youtube_proxy_url") or "").strip()
+
+    try:
+        if webshare_user and webshare_pass:
+            return WebshareProxyConfig(
+                proxy_username=webshare_user, proxy_password=webshare_pass,
+            )
+        if generic_url:
+            return GenericProxyConfig(http_url=generic_url, https_url=generic_url)
+    except InvalidProxyConfig as e:
+        print(f"  ⚠️  Proxy config ignored (invalid): {e}")
+    return None
+
+
+def get_transcript_entries(
+    video_id: str,
+    languages: list[str] | None = None,
+    proxy_config=None,
+) -> list[dict]:
     """
     Return raw transcript entries with timestamps.
     Each entry: {"text": str, "start": float, "duration": float}
@@ -115,6 +158,11 @@ def get_transcript_entries(video_id: str, languages: list[str] | None = None) ->
     languages: priority list of language codes to look for, e.g. ["uz", "en"].
     Defaults to ["en"] — matches the old hardcoded behaviour exactly, so any
     existing caller that doesn't pass `languages` is unaffected.
+
+    proxy_config: optional youtube_transcript_api ProxyConfig (see
+    build_proxy_config above) — routes requests through a proxy to work
+    around YouTube blocking cloud-provider IPs (RequestBlocked/IpBlocked).
+    None means "use this machine's IP directly", same as before.
 
     Root bug this fixes: this used to call fetcher.fetch(video_id) with no
     `languages` arg at all, which youtube-transcript-api silently defaults
@@ -135,7 +183,7 @@ def get_transcript_entries(video_id: str, languages: list[str] | None = None) ->
          will still produce output in the requested language/script).
     """
     languages = list(languages) if languages else ["en"]
-    fetcher   = YouTubeTranscriptApi()
+    fetcher   = YouTubeTranscriptApi(proxy_config=proxy_config)
 
     def _entries(fetched) -> list[dict]:
         return [
@@ -171,6 +219,17 @@ def get_transcript_entries(video_id: str, languages: list[str] | None = None) ->
         return _entries(fetched)
 
     except Exception as e:
+        from youtube_transcript_api._errors import RequestBlocked
+        if isinstance(e, RequestBlocked) and proxy_config is None:
+            raise RuntimeError(
+                f"YouTube is blocking transcript requests from this server's IP "
+                f"(common on Codespaces/cloud hosting — YouTube blocks most "
+                f"datacenter IP ranges outright, this has nothing to do with the "
+                f"video or language). Fix: add a proxy under Settings → YouTube "
+                f"proxy, then try again. 'Local video' also works right now with "
+                f"no setup, since Whisper transcribes from audio directly. "
+                f"({e.__class__.__name__})"
+            )
         raise RuntimeError(
             f"Could not fetch a transcript for this video in {languages}: {e}. "
             f"If this video truly has no captions in these languages, download "

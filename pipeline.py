@@ -23,7 +23,7 @@ except ImportError:
     sys.exit("❌  Run: pip install groq")
 
 from chunker   import chunk_youtube, chunk_pdf, Chunk
-from anki_gen  import extract_video_id, get_transcript_entries
+from anki_gen  import extract_video_id, get_transcript_entries, build_proxy_config
 from generator import (
     AIClient,
     GenerationResult,
@@ -277,6 +277,7 @@ def run(config: PipelineConfig, on_progress: callable = None) -> PipelineResult:
                 detect_topics = config.detect_topics,
                 on_progress   = _progress,
                 lang          = config.lang,
+                proxy_config  = build_proxy_config(cfg),
             )
         elif config.source == "pdf":
             gen_result = generate_from_pdf(
