@@ -324,6 +324,7 @@ input:focus { border-color: #6c8ef5; }
           <span class="chip active" onclick="selectChip('lang', this, 'en')">English</span>
           <span class="chip" onclick="selectChip('lang', this, 'ru')">Russian</span>
           <span class="chip" onclick="selectChip('lang', this, 'de')">Deutsch</span>
+          <span class="chip" onclick="selectChip('lang', this, 'uz')">Uzbek (кирилл)</span>
         </div>
       </div>
 
@@ -445,6 +446,7 @@ input:focus { border-color: #6c8ef5; }
           <span class="chip" onclick="saveDefault('default_lang','en',this,'defLangGroup')">English</span>
           <span class="chip" onclick="saveDefault('default_lang','ru',this,'defLangGroup')">Russian</span>
           <span class="chip" onclick="saveDefault('default_lang','de',this,'defLangGroup')">Deutsch</span>
+          <span class="chip" onclick="saveDefault('default_lang','uz',this,'defLangGroup')">Uzbek (кирилл)</span>
         </div>
       </div>
     </div>
@@ -745,11 +747,15 @@ function showResult(data) {
   const gen = s.generation || {};
   const fil = s.filter     || {};
   const qua = s.quality    || {};
+  const fmt = s.format     || {};
+  const uzNote = fmt.uz_transliterated
+    ? ` &nbsp;|&nbsp; <span>Cyrillic fallback:</span> ${fmt.uz_transliterated} fields`
+    : '';
   document.getElementById('stagesSummary').innerHTML =
     `<span>Generate:</span> ${gen.cards || 0} cards from ${gen.chunks || 0} chunks &nbsp;|&nbsp; ` +
     `<span>Filter:</span> ${fil.cards_in || 0}→${fil.cards_out || 0} &nbsp;|&nbsp; ` +
     `<span>Quality:</span> +${qua.mnemonics_added || 0} mnemonics &nbsp;|&nbsp; ` +
-    `<span>Model:</span> ${qua.model_used || 'n/a'}`;
+    `<span>Model:</span> ${qua.model_used || 'n/a'}${uzNote}`;
 
   // Preview
   const list = document.getElementById('previewList');
@@ -910,7 +916,7 @@ async function loadSettings() {
     });
 
     // Default lang
-    const langMap = { en: 0, ru: 1, de: 2 };
+    const langMap = { en: 0, ru: 1, de: 2, uz: 3 };
     const chips   = document.querySelectorAll('#defLangGroup .chip');
     chips.forEach(c => c.classList.remove('active'));
     chips[langMap[cfg.default_lang] ?? 0]?.classList.add('active');

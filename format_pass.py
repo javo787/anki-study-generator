@@ -27,6 +27,8 @@ try:
 except ImportError:
     sys.exit("❌  Run: pip install groq")
 
+from uz_transliterate import to_cyrillic, has_cyrillic
+
 GROQ_MODEL   = "llama-3.3-70b-versatile"
 FORMAT_BATCH = 25
 MAX_RETRY    = 3
@@ -40,14 +42,16 @@ class FormatResult:
     cloze_fixed:       int  = 0   # cards that had broken/missing {{c1::}} syntax, repaired
     cloze_demoted:     int  = 0   # cloze cards that couldn't be fixed, safely demoted to basic
     markdown_stripped:  int = 0
+    uz_transliterated: int  = 0   # fields converted Latin -> Cyrillic Uzbek (lang="uz" only)
     errors:            list = field(default_factory=list)
 
     def summary(self) -> str:
+        extra = f" | uz→Cyrillic: {self.uz_transliterated}" if self.uz_transliterated else ""
         return (
             f"Format: {self.cards_in} in → {self.cards_out} out | "
             f"cloze fixed: {self.cloze_fixed} | "
             f"cloze demoted (unfixable): {self.cloze_demoted} | "
-            f"markdown→HTML: {self.markdown_stripped}"
+            f"markdown→HTML: {self.markdown_stripped}{extra}"
         )
 
 
@@ -179,19 +183,28 @@ def format_cards(
     cards:        list[dict],
     deck:         str,
     groq_api_key: str = "",
+    lang:         str = "en",
 ) -> tuple[list[dict], FormatResult]:
     """
     Run the dedicated format-quality pass, then validate + repair every
     cloze card locally so a broken/dead card can never reach save_cards().
+
+    When lang == "uz", also runs a local Cyrillic safety net (see
+    _enforce_uz_cyrillic below) for the same reason the cloze repair exists:
+    the generation/quality prompts ask the model to write Cyrillic Uzbek,
+    but nothing guarantees compliance short of checking locally.
     """
     if not cards:
         return [], FormatResult(cards_in=0, cards_out=0)
 
     if not groq_api_key:
-        # No key — skip the AI pass but STILL run the local safety net below,
-        # since that costs nothing and catches the worst failure mode.
+        # No key — skip the AI pass but STILL run the local safety nets below,
+        # since those cost nothing and catch the worst failure modes.
         result = FormatResult(cards_in=len(cards), cards_out=len(cards))
-        return _validate_and_repair(cards, result), result
+        cards  = _validate_and_repair(cards, result)
+        if lang == "uz":
+            cards = _enforce_uz_cyrillic(cards, result)
+        return cards, result
 
     client   = Groq(api_key=groq_api_key)
     cards_in = len(cards)
@@ -217,6 +230,8 @@ def format_cards(
 
     result = FormatResult(cards_in=cards_in, cards_out=len(all_formatted))
     all_formatted = _validate_and_repair(all_formatted, result)
+    if lang == "uz":
+        all_formatted = _enforce_uz_cyrillic(all_formatted, result)
 
     print(f"\n  {result.summary()}")
     return all_formatted, result
@@ -250,5 +265,31 @@ def _validate_and_repair(cards: list[dict], result: FormatResult) -> list[dict]:
         card["back"]  = new_back
         if changed_f or changed_b:
             result.markdown_stripped += 1
+
+    return cards
+
+
+def _enforce_uz_cyrillic(cards: list[dict], result: FormatResult) -> list[dict]:
+    """
+    Local safety net for lang="uz" — guarantees Cyrillic script the same
+    way _validate_and_repair() guarantees real cloze syntax: the prompt
+    asks nicely, this makes it true regardless.
+
+    Deliberately conservative: a field is only transliterated if it
+    contains NO Cyrillic characters at all. If the model already wrote
+    Cyrillic (even mixed with e.g. a kept Latin abbreviation), that field
+    is left untouched rather than risk mangling something that's already
+    correct. See uz_transliterate.py's docstring for the tradeoffs this
+    implies — it's a best-effort net, not a guarantee that 100% of a card
+    that ignored the language instruction entirely will read correctly.
+    """
+    for card in cards:
+        for key in ("front", "back"):
+            text = card.get(key, "") or ""
+            if isinstance(text, list):
+                text = " ".join(str(x) for x in text)
+            if text and not has_cyrillic(text):
+                card[key] = to_cyrillic(text)
+                result.uz_transliterated += 1
 
     return cards

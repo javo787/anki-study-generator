@@ -29,8 +29,10 @@ C:\Users\Admin\Downloads\Menschen A1.1 KB.pdf must switch to choosen file type f
 | Groq semantic filtering (removes weak/duplicate cards)          | ✅ Working |
 | Gemini Pro quality control (+mnemonics)                         | ✅ Working |
 | Basic + Cloze card types                                        | ✅ Working |
+| Card language (en/ru/de/uz) — now actually reaches every prompt | ✅ Working |
+| Uzbek source videos → Cyrillic-script Uzbek cards               | ✅ Working |
 | Web UI (Flask + HTML)                                           | ✅ Working |
-| Terminal menu                                                   | ✅ Working |
+| Terminal menu                                                   | ⚠️ Stale — drifted from web pipeline, not covered here |
 | API usage monitor                                               | ✅ Working |
 | Daily quota reset                                               | ✅ Working |
 
