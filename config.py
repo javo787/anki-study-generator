@@ -29,6 +29,15 @@ DEFAULT_CONFIG = {
     "default_lang":       "en",
     "default_format":     "both",
     "chunk_size":         6000,
+
+    # YouTube transcript proxy — works around YouTube blocking cloud IPs
+    # (Codespaces/AWS/GCP/Azure) with a RequestBlocked error. Webshare takes
+    # priority if both fields are set; otherwise youtube_proxy_url (any
+    # generic http/https proxy) is used. Both empty = no proxy, same as
+    # before. See anki_gen.build_proxy_config().
+    "webshare_proxy_username": "",
+    "webshare_proxy_password": "",
+    "youtube_proxy_url":       "",
 }
 
 

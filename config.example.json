@@ -7,5 +7,8 @@
   "nvidia_api_key": "YOUR_NVIDIA_KEY",
   "default_lang": "en",
   "default_format": "both",
-  "chunk_size": 6000
+  "chunk_size": 6000,
+  "webshare_proxy_username": "",
+  "webshare_proxy_password": "",
+  "youtube_proxy_url": ""
 }
