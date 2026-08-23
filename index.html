@@ -960,14 +960,26 @@ async function loadSettings() {
 }
 
 async function saveKey(fieldName) {
-  const val = document.getElementById('key_' + fieldName).value.trim();
+  const input = document.getElementById('key_' + fieldName);
+  const val = input.value.trim();
   if (!val) return;
-  await fetch('/api/config', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ [fieldName]: val }),
-  });
-  document.getElementById('key_' + fieldName).value = '';
+  let res;
+  try {
+    res = await fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ [fieldName]: val }),
+    });
+  } catch (e) {
+    alert(`Could not reach the server: ${e.message}`);
+    return;                       // keep what was typed — nothing was saved
+  }
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    alert(`Save failed (HTTP ${res.status}). ${body}`);
+    return;                       // keep what was typed — nothing was saved
+  }
+  input.value = '';
   loadSettings();
   loadUsage();
 }

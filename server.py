@@ -117,7 +117,10 @@ def route_get_config():
         "openrouter":   bool(cfg.get("openrouter_api_key")),
         "cerebras":     bool(cfg.get("cerebras_api_key")),
         "nvidia":       bool(cfg.get("nvidia_api_key")),
-        "youtube_proxy": bool(cfg.get("webshare_proxy_username") or cfg.get("youtube_proxy_url")),
+        "youtube_proxy": bool(
+            (cfg.get("webshare_proxy_username") and cfg.get("webshare_proxy_password"))
+            or cfg.get("youtube_proxy_url")
+        ),
     }
     return jsonify(safe)
 
@@ -343,4 +346,13 @@ if __name__ == "__main__":
     print(f"\n🧠  Anki Generator Pro — Web UI")
     print(f"   http://localhost:{PORT}\n")
     threading.Timer(1.2, lambda: webbrowser.open(f"http://localhost:{PORT}")).start()
-    app.run(debug=False, port=PORT, use_reloader=False)
+    # use_reloader=True: restart automatically when .py files change (e.g.
+    # after `git pull`). Without this, editing/pulling server.py has NO
+    # effect on a process that's already running — the browser reloads
+    # index.html fresh on every request regardless, so the UI can show new
+    # fields/buttons while the backend silently keeps running old route
+    # logic underneath, with no error to indicate the mismatch. debug stays
+    # False on purpose: the interactive Werkzeug debugger executes arbitrary
+    # code from the browser on any unhandled exception, which is a real risk
+    # on a Codespace port that may be reachable outside just you.
+    app.run(debug=False, port=PORT, use_reloader=True)
