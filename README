@@ -208,6 +208,21 @@ python pipeline.py pdf "C:\path\to\book.pdf" "Deck Name" 11 50
 
 ---
 
+## Tests
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest -q
+```
+
+The suite needs **no API keys** (LLM calls are faked). `tests/test_save_cards.py`
+also imports the generated file into a real Anki collection when the `anki`
+package is installed — this is what proves Basic *and* Cloze cards import
+correctly (a Cloze note type must come from the first column of the file, see
+`save_cards()`); it is skipped automatically otherwise.
+
+---
+
 ## Built With
 
 - Python 3.13

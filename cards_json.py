@@ -113,3 +113,22 @@ def parse_cards(raw: str) -> list[dict]:
     if salvaged:
         print(f"  ⚠️  Reply was cut off / malformed — salvaged {len(cards)} complete card(s)")
     return cards
+
+
+def parse_json_object(raw: str):
+    """First complete JSON object in a model reply (prose/fences around it are
+    ignored), or None. For non-card payloads such as dedup verdicts."""
+    if not isinstance(raw, str):
+        return None
+    raw = _strip_fences(raw)
+    decoder = json.JSONDecoder()
+    for n, m in enumerate(re.finditer(r"\{", raw)):
+        if n >= MAX_START_CANDIDATES:
+            break
+        try:
+            value, _end = decoder.raw_decode(raw, m.start())
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            return value
+    return None

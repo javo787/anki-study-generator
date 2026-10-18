@@ -8,7 +8,10 @@ import re
 import sys
 import json
 import time
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
+
+from cards_json import parse_json_object
 
 # ── IMPORTS ────────────────────────────────────────────────────────────────────
 
@@ -149,81 +152,220 @@ def _filter_batch(
     return cards, []
 
 
-# ── CROSS-BATCH DEDUP ──────────────────────────────────────────────────────────
+# ── GLOBAL SEMANTIC DEDUP ──────────────────────────────────────────────────────
+#
+# The previous version cut the deck into batches of FILTER_BATCH cards and asked
+# the model to dedupe each batch on its own, so two cards that restate the same
+# fact in different parts of a lecture (card #3 and card #67) were never in the
+# same request and were never compared. It also let the model re-emit every
+# card's text and trusted the model's own "duplicates_removed" count.
+#
+# Now:
+#   1. Cheap, deterministic, GLOBAL pass finds groups of suspiciously similar
+#      cards (token overlap over the whole deck — no API calls).
+#   2. Only those groups are sent to the model, which answers with card IDs
+#      ("keep 12, remove 40") — it never rewrites card text, and an invalid or
+#      garbled answer can only ever leave cards in, never corrupt them.
+
+DEDUP_SIMILARITY   = 0.4   # Jaccard overlap above which two cards are "candidates"
+DEDUP_MIN_SHARED   = 2     # ...and they must share at least this many content tokens
+DEDUP_COMMON_FRAC  = 0.25  # tokens present in more than this share of cards carry no signal
+DEDUP_COMMON_MIN_N = 12    # (only applied to decks at least this big)
+DEDUP_GROUP_MAX    = 12    # max cards in one group sent to the model
+DEDUP_REQUEST_MAX  = 40    # max cards per request (several groups are packed together)
+DEDUP_PAUSE        = 2     # seconds between requests (rate limits)
 
 DEDUP_SYSTEM = """\
 You are reviewing Anki flashcards for semantic duplicates.
 
-Two cards are duplicates if they test the SAME medical fact, even if worded differently.
+You get several GROUPS of cards that look alike. Each card has an integer id.
+Inside a group, two cards are duplicates if they test the SAME fact, even if
+worded differently. Cards that only share a topic but test DIFFERENT facts are
+NOT duplicates — keep both.
+
 Examples of duplicates:
   - "What nerve innervates the diaphragm?" and "Which nerve supplies the diaphragm?"
   - "Where is CSF produced?" and "What structure produces CSF?"
 
-Keep the BETTER card (more specific question, cleaner answer).
+For each group keep the BETTER card (more specific question, cleaner answer) and
+list the ids to remove. Use ONLY the ids you were given. Never write card text.
 
-OUTPUT: JSON only — no markdown.
-{
-  "kept": [{"front": "...", "back": "...", "type": "...", "tags": [...]}],
-  "duplicates_removed": 5
-}"""
+OUTPUT: JSON only — no markdown, no explanation. Use an empty "remove" list when
+a group has no duplicates.
+{"results": [{"group": 0, "keep": 12, "remove": [40]}]}"""
 
 
-def _dedup_across_batches(
-    cards:  list[dict],
-    deck:   str,
-    client: Groq,
-) -> list[dict]:
+_HTML_TAG   = re.compile(r"<[^>]+>")
+_CLOZE      = re.compile(r"\{\{c\d+::(.*?)(?:::.*?)?\}\}", re.DOTALL)
+_WORD       = re.compile(r"\w+", re.UNICODE)
+
+
+def _card_text(value) -> str:
+    if isinstance(value, list):
+        value = " ".join(str(x) for x in value)
+    return str(value or "")
+
+
+def _card_tokens(card: dict) -> set:
+    """Language-agnostic content tokens: markup removed, lower-cased, words of
+    3+ letters cut to a 5-character stem so 'produced'/'produces' match."""
+    text = f"{_card_text(card.get('front'))} {_card_text(card.get('back'))}"
+    text = _CLOZE.sub(r"\1", text)
+    text = _HTML_TAG.sub(" ", text).lower()
+    return {w[:5] for w in _WORD.findall(text) if len(w) >= 3 and not w.isdigit()}
+
+
+def _find_duplicate_groups(cards: list[dict]) -> list[list[int]]:
     """
-    Final semantic deduplication across all cards.
-    Sends in batches of FILTER_BATCH to avoid token limits.
+    Indices of cards that look alike, grouped, across the WHOLE deck.
+    No API calls. Groups are in deck order; each has 2..DEDUP_GROUP_MAX cards.
     """
-    if len(cards) <= FILTER_BATCH:
-        batches = [cards]
-    else:
-        batches = [
-            cards[i:i + FILTER_BATCH]
-            for i in range(0, len(cards), FILTER_BATCH)
+    n      = len(cards)
+    tokens = [_card_tokens(c) for c in cards]
+
+    if n >= DEDUP_COMMON_MIN_N:
+        freq = Counter(w for t in tokens for w in t)
+        common = {w for w, k in freq.items() if k > DEDUP_COMMON_FRAC * n}
+        tokens = [t - common for t in tokens]
+
+    index = defaultdict(list)
+    for i, t in enumerate(tokens):
+        for w in t:
+            index[w].append(i)
+
+    parent = list(range(n))
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for i, t in enumerate(tokens):
+        shared = Counter()
+        for w in t:
+            for j in index[w]:
+                if j > i:
+                    shared[j] += 1
+        for j, k in shared.items():
+            union = len(t) + len(tokens[j]) - k
+            if k >= DEDUP_MIN_SHARED and k / union >= DEDUP_SIMILARITY:
+                parent[find(j)] = find(i)
+
+    components = defaultdict(list)
+    for i in range(n):
+        components[find(i)].append(i)
+
+    groups = []
+    for members in components.values():
+        if len(members) < 2:
+            continue
+        for s in range(0, len(members), DEDUP_GROUP_MAX):      # very large cluster: slice it
+            part = members[s:s + DEDUP_GROUP_MAX]
+            if len(part) >= 2:
+                groups.append(part)
+    groups.sort(key=lambda g: g[0])
+    return groups
+
+
+def _ids_to_remove(verdict: dict, groups: dict[int, list[int]]) -> set:
+    """
+    Turn the model's verdict into a set of card ids to drop — defensively.
+    `groups` maps group number -> the ids that were in that group of the request.
+    Anything malformed is ignored, so the worst case is "nothing removed".
+    """
+    results = verdict.get("results") if isinstance(verdict, dict) else None
+    if not isinstance(results, list):
+        return set()
+
+    keeps, removes = set(), set()
+    for r in results:
+        if not isinstance(r, dict):
+            continue
+        g, keep, remove = r.get("group"), r.get("keep"), r.get("remove")
+        members = groups.get(g) if isinstance(g, int) else None
+        if members is None or keep not in members or not isinstance(remove, list):
+            continue
+        keeps.add(keep)
+        removes.update(i for i in remove if i in members and i != keep)
+
+    return removes - keeps       # a card the model chose to keep is never removed
+
+
+def _dedup_global(cards: list[dict], deck: str, client: Groq) -> list[dict]:
+    """
+    Final semantic deduplication over ALL cards (see the section comment above).
+    Fails open: any error leaves the affected cards in the deck.
+    """
+    if len(cards) < 2:
+        return cards
+
+    groups = _find_duplicate_groups(cards)
+    if not groups:
+        print("  ✅  No duplicate candidates found — nothing to send to the model")
+        return cards
+
+    n_cand = sum(len(g) for g in groups)
+    print(f"  🔍  {len(groups)} group(s) of similar cards ({n_cand} cards) out of {len(cards)}")
+
+    # pack several groups into one request
+    requests, current, size = [], [], 0
+    for g in groups:
+        if current and size + len(g) > DEDUP_REQUEST_MAX:
+            requests.append(current)
+            current, size = [], 0
+        current.append(g)
+        size += len(g)
+    if current:
+        requests.append(current)
+
+    removed_ids = set()
+    for r_no, req_groups in enumerate(requests, 1):
+        numbered = {gi: g for gi, g in enumerate(req_groups)}
+        payload  = [
+            {"group": gi, "cards": [
+                {"id": i, "front": _card_text(cards[i].get("front")), "back": _card_text(cards[i].get("back"))}
+                for i in g
+            ]}
+            for gi, g in numbered.items()
         ]
-
-    all_kept = []
-    total_removed = 0
-
-    for i, batch in enumerate(batches, 1):
-        print(f"  🔍  Dedup batch {i}/{len(batches)}...", end=" ", flush=True)
         prompt = (
-            f"Remove semantic duplicates from these {len(batch)} cards.\n"
             f"Deck: {deck}\n\n"
-            f"Cards:\n{json.dumps(batch, indent=2, ensure_ascii=False)}\n\n"
+            f"Groups:\n{json.dumps(payload, indent=2, ensure_ascii=False)}\n\n"
             f"Return JSON only."
         )
-        try:
-            response = client.chat.completions.create(
-                model    = GROQ_MODEL,
-                messages = [
-                    {"role": "system", "content": DEDUP_SYSTEM},
-                    {"role": "user",   "content": prompt},
-                ],
-                temperature = 0.1,
-            )
-            raw  = response.choices[0].message.content.strip()
-            raw  = re.sub(r"^```(?:json)?\s*", "", raw)
-            raw  = re.sub(r"\s*```$", "", raw)
-            data = json.loads(raw)
+        print(f"  🔄  Dedup request {r_no}/{len(requests)}...", end=" ", flush=True)
 
-            kept    = data.get("kept", batch)
-            removed = data.get("duplicates_removed", 0)
-            total_removed += removed
-            all_kept.extend(kept)
-            print(f"{len(kept)} kept, {removed} removed")
+        for attempt in range(1, MAX_RETRY + 1):
+            try:
+                response = client.chat.completions.create(
+                    model       = GROQ_MODEL,
+                    messages    = [{"role": "system", "content": DEDUP_SYSTEM},
+                                   {"role": "user",   "content": prompt}],
+                    temperature = 0.1,
+                )
+                verdict = parse_json_object(response.choices[0].message.content)
+                found   = _ids_to_remove(verdict, numbered)
+                removed_ids |= found
+                print(f"{len(found)} duplicate(s) removed")
+                break
+            except Exception as e:
+                err = str(e)
+                if ("503" in err or "429" in err) and attempt < MAX_RETRY:
+                    wait = attempt * RETRY_WAIT
+                    print(f"\n  ⏳  Groq rate limit, retry {attempt}/{MAX_RETRY} in {wait}s...", end=" ", flush=True)
+                    time.sleep(wait)
+                else:
+                    print(f"skipped ({e.__class__.__name__}) — keeping these cards")
+                    break
 
-        except Exception as e:
-            print(f"skipped ({e.__class__.__name__})")
-            all_kept.extend(batch)   # on error keep all
+        if r_no < len(requests):
+            time.sleep(DEDUP_PAUSE)
 
-    if total_removed:
-        print(f"  ✅  Dedup complete: {total_removed} duplicates removed")
-
-    return all_kept
+    kept = [c for i, c in enumerate(cards) if i not in removed_ids]
+    if removed_ids:
+        print(f"  ✅  Dedup complete: {len(removed_ids)} duplicate(s) removed")
+    return kept
 
 
 # ── PUBLIC API ─────────────────────────────────────────────────────────────────
@@ -283,7 +425,7 @@ def filter_cards(
     # ── Step 2: semantic deduplication across all kept cards ──────────────────
     if semantic_dedup and len(all_kept) > 1:
         print(f"\n  🔍  Semantic deduplication on {len(all_kept)} cards...")
-        all_kept = _dedup_across_batches(all_kept, deck, client)
+        all_kept = _dedup_global(all_kept, deck, client)
 
     result = FilterResult(
         cards_in  = cards_in,
