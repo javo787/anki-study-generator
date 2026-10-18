@@ -250,6 +250,21 @@ def _convert_to_anki_cloze(text: str) -> str:
 
 # ── MAIN PIPELINE ──────────────────────────────────────────────────────────────
 
+def _usage_key(provider_name: str):
+    """Map an AIClient name such as 'Gemini (gemini-2.5-flash)' to the key the
+    quota monitor (usage.LIMITS) displays. Names were previously lower-cased into
+    keys like 'gemini_gemini-2.5-flash' that the monitor never showed."""
+    n = (provider_name or "").lower()
+    if n in ("", "none"):
+        return None
+    if "gemini" in n:
+        return "gemini_pro" if "pro" in n else "gemini_flash"
+    for known in ("groq", "openrouter", "cerebras"):
+        if known in n:
+            return known
+    return re.sub(r"[^a-z0-9_-]+", "_", n).strip("_")
+
+
 def run(config: PipelineConfig, on_progress: callable = None) -> PipelineResult:
     """
     Run the full pipeline end to end.
@@ -392,17 +407,34 @@ def run(config: PipelineConfig, on_progress: callable = None) -> PipelineResult:
 
     raw_cards           = gen_result.cards
     result.total_raw    = len(raw_cards)
+
+    chunks_failed = gen_result.chunks_total - gen_result.chunks_done
+    coverage_pct  = (round(gen_result.chunks_done / gen_result.chunks_total * 100)
+                     if gen_result.chunks_total else 0)
     result.stages["generation"] = {
-        "cards":      result.total_raw,
-        "chunks":     gen_result.chunks_done,
-        "ai_used":    gen_result.ai_used,
+        "cards":         result.total_raw,
+        "chunks":        gen_result.chunks_done,
+        "chunks_total":  gen_result.chunks_total,
+        "chunks_failed": chunks_failed,
+        "coverage_pct":  coverage_pct,
+        "ai_used":       gen_result.ai_used,
     }
 
-    # Track usage
+    # A source that is only partly covered must never look like a clean success:
+    # the cards from the failed parts are simply absent from the deck.
+    if chunks_failed:
+        errors.append(
+            f"Only {gen_result.chunks_done} of {gen_result.chunks_total} parts of the source "
+            f"produced cards ({coverage_pct}% coverage) — the rest is MISSING from the deck."
+        )
+        errors.extend(gen_result.errors)
+
+    # Track usage (under the keys the quota monitor actually displays)
     for provider, count in gen_result.ai_used.items():
-        provider_key = provider.lower().replace(" ", "_").replace("(", "").replace(")", "")
-        for _ in range(count):
-            record(provider_key, tokens=2000)
+        provider_key = _usage_key(provider)
+        if provider_key:
+            for _ in range(count):
+                record(provider_key, tokens=2000)
 
     if on_progress:
         on_progress({"stage": "generated", "cards": result.total_raw, "pct": 40})
@@ -416,10 +448,10 @@ def run(config: PipelineConfig, on_progress: callable = None) -> PipelineResult:
         raw_path = save_cards(raw_cards, config.deck, filename_suffix="RAW_prefilter")
         print(f"  💾  Raw pre-filter cards saved: {raw_path}")
 
-    # Пауза чтобы Gemini RPM лимит восстановился перед quality шагом
-    if result.total_raw > 0:
-        print("  ⏸️   Waiting 60s for Gemini RPM limit to recover...")
-        time.sleep(60)
+    # (There used to be an unconditional 60 s pause here "for the Gemini RPM limit".
+    #  The filter step runs on Groq and the quality step on gemini-2.5-pro, which has
+    #  its own per-model quota — so the pause protected nothing and cost 60 s per run.
+    #  Rate limits inside each step are handled where the call is made.)
 
     # ── Step 5: Filter ─────────────────────────────────────────────────────────
     filtered_cards = raw_cards

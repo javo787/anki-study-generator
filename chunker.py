@@ -144,6 +144,14 @@ def chunk_youtube(entries: list[dict]) -> list[Chunk]:
     if buffer:
         merged.append(buffer)
 
+    # A short tail ("thanks for watching, see you next time") must not become its
+    # own chunk: it would cost a request of its own and the model, asked for a
+    # number of cards, would invent them from nothing. Fold it into the previous one.
+    if len(merged) > 1 and (merged[-1]["end_time"] - merged[-1]["start_time"]) < MIN_CHUNK_SECONDS:
+        tail = merged.pop()
+        merged[-1]["text"]    += " " + tail["text"]
+        merged[-1]["end_time"] = tail["end_time"]
+
     # ── Wrap in Chunk dataclass ────────────────────────────────────────────────
     total = len(merged)
     result = []
