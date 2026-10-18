@@ -3,6 +3,7 @@ pipeline.py — Main orchestration pipeline
 Connects: chunker → generator → filter → quality → output
 """
 
+import csv
 import os
 import re
 import sys
@@ -141,10 +142,44 @@ def _safe_name(text: str) -> str:
     ).strip().replace(" ", "_")
 
 
+def _as_text(value) -> str:
+    """Raw LLM output can give a field as a list of lines — flatten it."""
+    if isinstance(value, list):
+        value = "\n".join(str(x) for x in value)
+    return str(value or "")
+
+
+def _clean_field(text) -> str:
+    """One card field -> single-line text for the import file (newline -> <br>)."""
+    text = _as_text(text).replace("\t", " ").replace("\r\n", "\n")
+    return text.replace("\n", "<br>")
+
+
+def _clean_tags(tags) -> str:
+    """Anki tags are space-separated, so a tag containing a space would silently
+    become two tags. Join words with '_' and drop empties/duplicates."""
+    if isinstance(tags, str):
+        tags = re.split(r"[,;]+", tags)
+    seen = []
+    for t in tags or []:
+        t = re.sub(r"\s+", "_", str(t).strip())
+        if t and t not in seen:
+            seen.append(t)
+    return " ".join(seen)
+
+
 def save_cards(cards: list[dict], deck: str, filename_suffix: str = "") -> str:
     """
     Save cards to output folder in Anki import format.
-    Handles both Basic and Cloze note types in one file.
+
+    One file holds both note types. The note type is read from the FIRST COLUMN
+    (`#notetype column:1`) instead of from header lines: Anki only honours '#'
+    header lines at the very top of the file, so a second `#notetype:Cloze`
+    block in the middle was ignored and every cloze card was imported as a
+    Basic note showing raw {{c1::...}} text.
+
+    Every field is CSV-quoted. With `#separator:tab` Anki treats a field that
+    starts with `"` as quoted, which used to strip the quotes from the text.
 
     filename_suffix: optional tag appended to the filename only (e.g. "RAW")
     — the #deck: header always uses the clean `deck` name so the file still
@@ -155,54 +190,48 @@ def save_cards(cards: list[dict], deck: str, filename_suffix: str = "") -> str:
     suffix   = f"_{_safe_name(filename_suffix)}" if filename_suffix else ""
     filename = os.path.join(OUTPUT_DIR, f"anki_{_safe_name(deck)}{suffix}_{date_str}.txt")
 
-    basic_cards = [c for c in cards if c.get("type", "basic") == "basic"]
-    cloze_cards = [c for c in cards if c.get("type") == "cloze"]
+    with open(filename, "w", encoding="utf-8", newline="") as f:
+        f.write("#separator:tab\n")
+        f.write("#html:true\n")
+        f.write("#notetype column:1\n")
+        f.write(f"#deck:{' '.join(str(deck).split())}\n")
+        f.write("#tags column:4\n")
 
-    lines = []
-
-    # ── Basic cards ────────────────────────────────────────────────────────────
-    if basic_cards:
-        lines += [
-            "#separator:tab",
-            "#html:true",
-            f"#deck:{deck}",
-            "#notetype:Basic",
-            "#columns:Front\tBack\tTags",
-        ]
-        for card in basic_cards:
-            front = card["front"].replace("\t", " ").replace("\n", "<br>")
-            back  = card["back"].replace("\t", " ").replace("\n", "<br>")
-            tags  = " ".join(card.get("tags", []))
-            lines.append(f"{front}\t{back}\t{tags}")
-
-    # ── Cloze cards ────────────────────────────────────────────────────────────
-    if cloze_cards:
-        lines += [
-            "",
-            "#notetype:Cloze",
-            "#columns:Text\tBack Extra\tTags",
-        ]
-        for card in cloze_cards:
-            # Convert "The ___ drains CSF. (Arachnoid villi)"
-            # to Anki cloze: "The {{c1::Arachnoid villi}} drains CSF."
-            front = _convert_to_anki_cloze(card["front"])
-            back  = card["back"].replace("\t", " ").replace("\n", "<br>")
-            tags  = " ".join(card.get("tags", []))
-            lines.append(f"{front}\t{back}\t{tags}")
-
-    with open(filename, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines))
+        writer = csv.writer(f, delimiter="\t", quoting=csv.QUOTE_ALL, lineterminator="\n")
+        for card in cards:
+            is_cloze = str(card.get("type", "basic")).strip().lower() == "cloze"
+            front    = _as_text(card.get("front", ""))
+            if is_cloze:
+                # Only legacy "___ (answer)" cards get changed; see the guard
+                # inside _convert_to_anki_cloze.
+                front = _convert_to_anki_cloze(front)
+            writer.writerow([
+                "Cloze" if is_cloze else "Basic",
+                _clean_field(front),
+                _clean_field(card.get("back", "")),
+                _clean_tags(card.get("tags", [])),
+            ])
 
     return filename
 
 
+_REAL_CLOZE = re.compile(r"\{\{c\d+::")
+
+
 def _convert_to_anki_cloze(text: str) -> str:
     """
-    Convert our cloze format to Anki cloze format.
+    Convert our legacy cloze format to Anki cloze format.
 
     Input:  "The ___ drains CSF into venous sinuses. (Arachnoid villi)"
     Output: "The {{c1::Arachnoid villi}} drains CSF into venous sinuses."
+
+    Text that already contains real {{cN::...}} markup is returned unchanged.
+    Without this guard a valid card such as
+    "{{c1::Choroid plexus}} (in the ventricles)" was corrupted into two blanks.
     """
+    if _REAL_CLOZE.search(text):
+        return text
+
     # Extract answer from parentheses at end
     match = re.search(r"\(([^)]+)\)\s*$", text)
     if not match:

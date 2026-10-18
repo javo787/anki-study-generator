@@ -5,3 +5,5 @@ uploads/
 .env
 *.pyc 
 config.json
+
+.pytest_cache/
