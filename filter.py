@@ -12,6 +12,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 
 from cards_json import parse_json_object
+from textmatch import as_text, card_text, content_tokens
 
 # ── IMPORTS ────────────────────────────────────────────────────────────────────
 
@@ -195,24 +196,13 @@ a group has no duplicates.
 {"results": [{"group": 0, "keep": 12, "remove": [40]}]}"""
 
 
-_HTML_TAG   = re.compile(r"<[^>]+>")
-_CLOZE      = re.compile(r"\{\{c\d+::(.*?)(?:::.*?)?\}\}", re.DOTALL)
-_WORD       = re.compile(r"\w+", re.UNICODE)
-
-
 def _card_text(value) -> str:
-    if isinstance(value, list):
-        value = " ".join(str(x) for x in value)
-    return str(value or "")
+    return as_text(value)
 
 
 def _card_tokens(card: dict) -> set:
-    """Language-agnostic content tokens: markup removed, lower-cased, words of
-    3+ letters cut to a 5-character stem so 'produced'/'produces' match."""
-    text = f"{_card_text(card.get('front'))} {_card_text(card.get('back'))}"
-    text = _CLOZE.sub(r"\1", text)
-    text = _HTML_TAG.sub(" ", text).lower()
-    return {w[:5] for w in _WORD.findall(text) if len(w) >= 3 and not w.isdigit()}
+    """Language-agnostic content tokens (see textmatch.py)."""
+    return content_tokens(card_text(card))
 
 
 def _find_duplicate_groups(cards: list[dict]) -> list[list[int]]:

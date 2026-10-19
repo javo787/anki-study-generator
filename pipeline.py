@@ -39,6 +39,7 @@ from filter    import filter_cards, get_kept_cards
 from quality   import improve_cards, score_cards
 from format_pass import format_cards
 from usage     import record, is_available, print_usage, get_all_usage
+from sources   import is_valid_time, restore_times, source_html
 from config    import load_config
 
 # ── CONSTANTS ──────────────────────────────────────────────────────────────────
@@ -60,6 +61,7 @@ class PipelineConfig:
     run_quality:  bool = True   # Step 6: Gemini Pro quality
     detect_topics: bool = True  # Step 3: topic detection
     on_progress:  object = None # callback for web UI
+    source_links: bool = True   # YouTube: link every card back to its moment in the video
 
 
 @dataclass
@@ -168,7 +170,7 @@ def _clean_tags(tags) -> str:
     return " ".join(seen)
 
 
-def save_cards(cards: list[dict], deck: str, filename_suffix: str = "") -> str:
+def save_cards(cards: list[dict], deck: str, filename_suffix: str = "", video_id: str | None = None) -> str:
     """
     Save cards to output folder in Anki import format.
 
@@ -184,6 +186,9 @@ def save_cards(cards: list[dict], deck: str, filename_suffix: str = "") -> str:
     filename_suffix: optional tag appended to the filename only (e.g. "RAW")
     — the #deck: header always uses the clean `deck` name so the file still
     imports into the right Anki deck if opened directly.
+
+    video_id: when given, a card that has a valid time `t` (seconds, see sources.py)
+    gets a "▶ mm:ss" link to that moment of the video appended to its back.
     """
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     date_str = datetime.now().strftime("%Y-%m-%d_%H-%M")
@@ -205,10 +210,14 @@ def save_cards(cards: list[dict], deck: str, filename_suffix: str = "") -> str:
                 # Only legacy "___ (answer)" cards get changed; see the guard
                 # inside _convert_to_anki_cloze.
                 front = _convert_to_anki_cloze(front)
+            back = _clean_field(card.get("back", ""))
+            if video_id and is_valid_time(card.get("t")):
+                link = source_html(video_id, card["t"])
+                back = f"{back}<br><br>{link}" if back else link
             writer.writerow([
                 "Cloze" if is_cloze else "Basic",
                 _clean_field(front),
-                _clean_field(card.get("back", "")),
+                back,
                 _clean_tags(card.get("tags", [])),
             ])
 
@@ -429,6 +438,13 @@ def run(config: PipelineConfig, on_progress: callable = None) -> PipelineResult:
         )
         errors.extend(gen_result.errors)
 
+    video_id = None
+    if config.source == "youtube" and config.source_links:
+        try:
+            video_id = extract_video_id(config.input)
+        except ValueError:
+            video_id = None
+
     # Track usage (under the keys the quota monitor actually displays)
     for provider, count in gen_result.ai_used.items():
         provider_key = _usage_key(provider)
@@ -445,7 +461,7 @@ def run(config: PipelineConfig, on_progress: callable = None) -> PipelineResult:
     # lets you see exactly what the filter step is removing (and why, if you
     # compare against the final file's card count).
     if raw_cards:
-        raw_path = save_cards(raw_cards, config.deck, filename_suffix="RAW_prefilter")
+        raw_path = save_cards(raw_cards, config.deck, filename_suffix="RAW_prefilter", video_id=video_id)
         print(f"  💾  Raw pre-filter cards saved: {raw_path}")
 
     # Let the per-minute Gemini limit recover before the next step — but only when
@@ -577,7 +593,14 @@ def run(config: PipelineConfig, on_progress: callable = None) -> PipelineResult:
     final_cards = score_cards(final_cards, lang=config.lang)
 
     # ── Step 8: Save ───────────────────────────────────────────────────────────
-    filename = save_cards(final_cards, config.deck)
+    # The filter / quality / format passes let a model rewrite the cards and it may
+    # drop fields it does not know, so the video time is matched back to the original
+    # cards (sources.restore_times) before the links are written.
+    if video_id:
+        restored = restore_times(final_cards, raw_cards)
+        if restored:
+            print(f"  🔗  Source time restored on {restored} rewritten card(s)")
+    filename = save_cards(final_cards, config.deck, video_id=video_id)
 
     result.cards       = final_cards
     result.filename    = filename
@@ -610,15 +633,17 @@ def run_youtube(
     run_filter:   bool = True,
     run_quality:  bool = True,
     on_progress:  callable = None,
+    source_links: bool = True,
 ) -> PipelineResult:
     return run(PipelineConfig(
-        source      = "youtube",
-        input       = url,
-        deck        = deck,
-        lang        = lang,
-        run_filter  = run_filter,
-        run_quality = run_quality,
-        on_progress = on_progress,
+        source       = "youtube",
+        input        = url,
+        deck         = deck,
+        lang         = lang,
+        run_filter   = run_filter,
+        run_quality  = run_quality,
+        on_progress  = on_progress,
+        source_links = source_links,
     ), on_progress=on_progress)
 
 
