@@ -448,10 +448,21 @@ def run(config: PipelineConfig, on_progress: callable = None) -> PipelineResult:
         raw_path = save_cards(raw_cards, config.deck, filename_suffix="RAW_prefilter")
         print(f"  💾  Raw pre-filter cards saved: {raw_path}")
 
-    # (There used to be an unconditional 60 s pause here "for the Gemini RPM limit".
-    #  The filter step runs on Groq and the quality step on gemini-2.5-pro, which has
-    #  its own per-model quota — so the pause protected nothing and cost 60 s per run.
-    #  Rate limits inside each step are handled where the call is made.)
+    # Let the per-minute Gemini limit recover before the next step — but only when
+    # that step would hit the SAME limit. The filter runs on Groq, and quality runs on
+    # gemini-2.5-pro (its own per-model quota) when a Pro key is set. Without a Pro key
+    # quality falls back to Flash on the generation key (see Step 6), so wait then.
+    # (This used to be an unconditional 60 s pause on every run.)
+    quality_reuses_flash = (
+        config.run_quality
+        and not cfg.get("gemini_pro_key")
+        and bool(cfg.get("gemini_api_key"))
+        and result.total_raw > 0
+        and any("gemini" in provider.lower() for provider in gen_result.ai_used)
+    )
+    if quality_reuses_flash:
+        print("  ⏸️   Waiting 60s for Gemini RPM limit to recover (quality reuses Flash)...")
+        time.sleep(60)
 
     # ── Step 5: Filter ─────────────────────────────────────────────────────────
     filtered_cards = raw_cards

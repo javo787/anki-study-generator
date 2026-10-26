@@ -252,13 +252,19 @@ def test_usage_is_recorded_under_the_keys_the_monitor_shows_and_never_as_none(en
 
 
 @pytest.mark.parametrize("cfg, quality", [
-    ({"gemini_api_key": "k"}, False),
+    ({"gemini_api_key": "k"}, False),                            # no quality step at all
     ({"gemini_api_key": "k", "gemini_pro_key": "p"}, True),      # quality runs on gemini-2.5-pro: its own quota
 ])
-def test_no_fixed_60s_wait_after_generation(env, cfg, quality):
+def test_no_60s_wait_when_the_next_step_does_not_share_the_flash_limit(env, cfg, quality):
     env(cfg, FakeGemini())
     _run(run_quality=quality)
     assert 60 not in env.sleeps.calls
+
+
+def test_60s_wait_when_quality_falls_back_to_flash_on_the_generation_key(env):
+    env({"gemini_api_key": "k"}, FakeGemini())                   # no Pro key -> quality reuses Flash (Step 6 elif)
+    _run(run_quality=True)
+    assert env.sleeps.calls.count(60) == 1
 
 
 # ── 7. prompts ──────────────────────────────────────────────────────────────────
