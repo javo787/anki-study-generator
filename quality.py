@@ -53,9 +53,9 @@ Your tasks for EACH card:
 2. PHRASING — improve vague questions
 3. ACCURACY — fix any medical inaccuracies silently
 4. CLOZE FORMAT — for "type": "cloze" cards, "front" MUST use real Anki
-   syntax: "What is the outermost meningeal layer?<br><br>{{c1::Dura mater}}".
+   syntax: "What is the outermost meningeal layer?<br><br>{{{{c1::Dura mater}}}}".
    NEVER use "___" placeholders — Anki generates zero cards for a cloze
-   note with no {{cN::...}} markup, so a "___" card is silently dead.
+   note with no {{{{cN::...}}}} markup, so a "___" card is silently dead.
 5. FORMATTING — HTML only, never markdown (no **bold**, use <b>bold</b>
    instead) — the output is rendered as raw HTML.
 6. LANGUAGE — {language_instruction} This applies to any text you add or
@@ -69,18 +69,18 @@ IMPORTANT:
 - Preserve all existing tags
 
 OUTPUT: JSON only — no markdown.
-{
+{{
   "cards": [
-    {
+    {{
       "front": "...",
       "back": "...",
       "type": "basic",
       "tags": ["..."],
       "improved": true,
       "mnemonic_added": false
-    }
+    }}
   ]
-}"""
+}}"""
 
 
 def _process_batch(cards, deck, client, model, lang="en"):
