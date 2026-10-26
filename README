@@ -208,6 +208,27 @@ python pipeline.py pdf "C:\path\to\book.pdf" "Deck Name" 11 50
 
 ---
 
+## Content type (profiles)
+
+Pick **Content type** in the UI (or `"profile"` in the request / `PipelineConfig.profile`):
+
+| profile | for | notes |
+|---|---|---|
+| `medical` (default) | lectures / textbooks for medical students | unchanged |
+| `german` | a German textbook (e.g. *Menschen* A1–A2) or lesson video | vocabulary with article + plural + Perfekt, grammar as cloze |
+
+For `german` the whole pipeline switches, not only the generation prompt: the topic prompt, the
+duplicate check (a vocabulary card and a cloze of its example sentence are *not* duplicates) and the
+Gemini quality check (articles, plurals, Perfekt, example sentences) are German; the medical quality
+*filter* is skipped (it would call vocabulary "trivial"); the textbook's own order is kept; and
+**Card language** means the language of the *translations* — the German itself stays German. With
+Card language = Uzbek the Cyrillic safety net is not applied to a German deck (it would turn
+`der Arzt` into `дер Арзт`), so Uzbek translations rely on the prompt.
+
+For a German YouTube lesson the German caption track is tried first.
+
+---
+
 ## Source links (YouTube)
 
 Cards made from a YouTube video get a small `▶ mm:ss` link at the end of the back that

@@ -48,11 +48,15 @@ class FakeGemini:
     def __init__(self, script=None):
         self.script = script or (lambda idx, attempt: None)
         self.attempts = {}
+        self.systems = []            # system prompt of every card-generation call
+        self.topic_prompts = []      # contents of every topic-detection call
         self.models = self
 
     def generate_content(self, model, contents, config=None):
-        if "main anatomical or medical topic" in contents:       # topic detection call
+        if "main anatomical or medical topic" in contents or "main topic of this German" in contents:   # topic detection
+            self.topic_prompts.append(contents)
             return Resp("Fake topic")
+        self.systems.append((config or {}).get("system_instruction", ""))
         idx = int(re.search(r"Chunk: (\d+) of", contents).group(1))
         self.attempts[idx] = self.attempts.get(idx, 0) + 1
         outcome = self.script(idx, self.attempts[idx])
@@ -71,10 +75,12 @@ class FakeChatClient:
     """Mimics groq / openai clients: client.chat.completions.create(...)."""
     def __init__(self, fail=False):
         self.fail, self.calls = fail, 0
+        self.systems = []
         self.chat = types.SimpleNamespace(completions=self)
 
     def create(self, model, messages, temperature=0.3, **kw):
         self.calls += 1
+        self.systems.append(messages[0]["content"])
         if self.fail:
             raise RuntimeError("500 fallback down")
         cards = [{"front": "Fallback card?", "back": "yes", "type": "basic", "tags": []}]

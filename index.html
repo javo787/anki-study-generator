@@ -320,6 +320,20 @@ input:focus { border-color: #6c8ef5; }
       <hr class="divider">
 
       <div class="field">
+        <label>Content type</label>
+        <div class="chip-group" id="profileGroup">
+          <span class="chip active" onclick="selectChip('profile', this, 'medical')">Medical</span>
+          <span class="chip" onclick="selectChip('profile', this, 'german')">German textbook</span>
+        </div>
+        <div class="toggle-sub" id="profileHint" style="display:none; margin-top:6px">
+          Vocabulary and grammar cards (der/die/das, plural, Perfekt). <b>Card language</b> then means the
+          language of the translations — the German itself stays German. Keeps the book's order.
+        </div>
+      </div>
+
+      <hr class="divider">
+
+      <div class="field">
         <label>Card language</label>
         <div class="chip-group" id="langGroup">
           <span class="chip active" onclick="selectChip('lang', this, 'en')">English</span>
@@ -489,6 +503,7 @@ input:focus { border-color: #6c8ef5; }
 // ── STATE ──────────────────────────────────────────────────────────────────────
 let currentSource  = 'youtube';
 let currentLang    = 'en';
+let currentProfile = 'medical';
 let lastFilename   = '';
 let sessionId      = 'sess_' + Date.now();
 let pollInterval   = null;
@@ -643,6 +658,11 @@ function selectChip(group, el, value) {
     currentLang = value;
     document.querySelectorAll('#langGroup .chip').forEach(c => c.classList.remove('active'));
     el.classList.add('active');
+  } else if (group === 'profile') {
+    currentProfile = value;
+    document.querySelectorAll('#profileGroup .chip').forEach(c => c.classList.remove('active'));
+    el.classList.add('active');
+    document.getElementById('profileHint').style.display = value === 'german' ? 'block' : 'none';
   }
 }
 
@@ -716,6 +736,7 @@ async function generate() {
   const body = {
     deck:        document.getElementById('deckName').value.trim() || 'My Deck',
     lang:        currentLang,
+    profile:     currentProfile,
     run_filter:  document.getElementById('toggleFilter').checked,
     run_quality: document.getElementById('toggleQuality').checked,
     session_id:  sessionId,

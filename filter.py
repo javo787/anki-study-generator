@@ -12,6 +12,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 
 from cards_json import parse_json_object
+from profiles import GERMAN_DEDUP_SYSTEM
 from textmatch import as_text, card_text, content_tokens
 
 # ── IMPORTS ────────────────────────────────────────────────────────────────────
@@ -282,7 +283,7 @@ def _ids_to_remove(verdict: dict, groups: dict[int, list[int]]) -> set:
     return removes - keeps       # a card the model chose to keep is never removed
 
 
-def _dedup_global(cards: list[dict], deck: str, client: Groq) -> list[dict]:
+def _dedup_global(cards: list[dict], deck: str, client: Groq, system: str = None) -> list[dict]:
     """
     Final semantic deduplication over ALL cards (see the section comment above).
     Fails open: any error leaves the affected cards in the deck.
@@ -290,6 +291,7 @@ def _dedup_global(cards: list[dict], deck: str, client: Groq) -> list[dict]:
     if len(cards) < 2:
         return cards
 
+    system = system or DEDUP_SYSTEM
     groups = _find_duplicate_groups(cards)
     if not groups:
         print("  ✅  No duplicate candidates found — nothing to send to the model")
@@ -330,7 +332,7 @@ def _dedup_global(cards: list[dict], deck: str, client: Groq) -> list[dict]:
             try:
                 response = client.chat.completions.create(
                     model       = GROQ_MODEL,
-                    messages    = [{"role": "system", "content": DEDUP_SYSTEM},
+                    messages    = [{"role": "system", "content": system},
                                    {"role": "user",   "content": prompt}],
                     temperature = 0.1,
                 )
@@ -365,6 +367,7 @@ def filter_cards(
     deck:        str,
     groq_api_key: str,
     semantic_dedup: bool = True,
+    profile:     str = "medical",
 ) -> FilterResult:
     """
     Main entry point. Filter and deduplicate a list of cards.
@@ -374,6 +377,10 @@ def filter_cards(
         deck:            deck name for context
         groq_api_key:    Groq API key
         semantic_dedup:  run cross-batch semantic deduplication
+        profile:         "medical" | "german". The quality filter below is medical
+                         ("trivial for a medical student", "what is X? is vague") and
+                         would remove vocabulary cards, so a german deck skips it and
+                         only gets de-duplicated, with German rules.
 
     Returns:
         FilterResult with kept cards and statistics
@@ -393,7 +400,12 @@ def filter_cards(
         for i in range(0, len(cards), FILTER_BATCH)
     ]
 
-    print(f"\n  🔎  Filtering {cards_in} cards in {len(batches)} batch(es)...")
+    if profile == "german":
+        print(f"\n  🔎  Quality filter skipped for the german profile (its rules are medical) — {cards_in} cards kept")
+        batches = []
+        all_kept.extend(cards)
+    else:
+        print(f"\n  🔎  Filtering {cards_in} cards in {len(batches)} batch(es)...")
 
     for i, batch in enumerate(batches, 1):
         print(f"  🔄  Filter batch {i}/{len(batches)}...", end=" ", flush=True)
@@ -415,7 +427,7 @@ def filter_cards(
     # ── Step 2: semantic deduplication across all kept cards ──────────────────
     if semantic_dedup and len(all_kept) > 1:
         print(f"\n  🔍  Semantic deduplication on {len(all_kept)} cards...")
-        all_kept = _dedup_global(all_kept, deck, client)
+        all_kept = _dedup_global(all_kept, deck, client, GERMAN_DEDUP_SYSTEM if profile == "german" else None)
 
     result = FilterResult(
         cards_in  = cards_in,

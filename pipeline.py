@@ -40,6 +40,7 @@ from quality   import improve_cards, score_cards
 from format_pass import format_cards
 from usage     import record, is_available, print_usage, get_all_usage
 from sources   import is_valid_time, restore_times, source_html
+from profiles  import normalize_profile
 from config    import load_config
 
 # ── CONSTANTS ──────────────────────────────────────────────────────────────────
@@ -62,6 +63,7 @@ class PipelineConfig:
     detect_topics: bool = True  # Step 3: topic detection
     on_progress:  object = None # callback for web UI
     source_links: bool = True   # YouTube: link every card back to its moment in the video
+    profile:      str  = "medical"  # "medical" | "german" — what kind of material this is (see profiles.py)
 
 
 @dataclass
@@ -289,9 +291,11 @@ def run(config: PipelineConfig, on_progress: callable = None) -> PipelineResult:
       7. Score and sort
       8. Save to file
     """
+    profile   = normalize_profile(config.profile)      # fail early on a typo, not after the API calls
     cfg       = load_config()
     started   = time.time()
     result    = PipelineResult(cards=[], filename="")
+    result.stages["profile"] = profile
     errors    = []
 
     print(f"\n{'─'*50}")
@@ -331,6 +335,7 @@ def run(config: PipelineConfig, on_progress: callable = None) -> PipelineResult:
                 on_progress   = _progress,
                 lang          = config.lang,
                 proxy_config  = build_proxy_config(cfg),
+                profile       = profile,
             )
         elif config.source == "pdf":
             gen_result = generate_from_pdf(
@@ -342,6 +347,7 @@ def run(config: PipelineConfig, on_progress: callable = None) -> PipelineResult:
                 detect_topics = config.detect_topics,
                 on_progress   = _progress,
                 lang          = config.lang,
+                profile       = profile,
             )
         elif config.source == "video":
             from video_gen import transcribe_local_video
@@ -409,7 +415,7 @@ def run(config: PipelineConfig, on_progress: callable = None) -> PipelineResult:
             print(f"  📦  {len(chunks)} chunks from video transcript")
 
             from generator import _run_pipeline
-            gen_result = _run_pipeline(chunks, config.deck, clients, config.detect_topics, _progress, config.lang)
+            gen_result = _run_pipeline(chunks, config.deck, clients, config.detect_topics, _progress, config.lang, profile)
 
     except Exception as e:
         raise RuntimeError(f"Generation failed: {e}")
@@ -494,6 +500,7 @@ def run(config: PipelineConfig, on_progress: callable = None) -> PipelineResult:
                 cards        = raw_cards,
                 deck         = config.deck,
                 groq_api_key = cfg["groq_api_key"],
+                profile      = profile,
             )
             filtered_cards = get_kept_cards(filter_result)
             record("groq", tokens=len(raw_cards) * 150)
@@ -531,6 +538,7 @@ def run(config: PipelineConfig, on_progress: callable = None) -> PipelineResult:
                 api_key = cfg["gemini_pro_key"],
                 use_pro = True,
                 lang    = config.lang,
+                profile = profile,
             )
             record("gemini_pro", tokens=len(filtered_cards) * 200)
 
@@ -556,6 +564,7 @@ def run(config: PipelineConfig, on_progress: callable = None) -> PipelineResult:
                 api_key = cfg["gemini_api_key"],
                 use_pro = False,
                 lang    = config.lang,
+                profile = profile,
             )
         except Exception as e:
             print(f"  ⚠️  Quality step failed: {e} — skipping")
@@ -577,6 +586,7 @@ def run(config: PipelineConfig, on_progress: callable = None) -> PipelineResult:
                 deck         = config.deck,
                 groq_api_key = cfg.get("groq_api_key", ""),
                 lang         = config.lang,
+                profile      = profile,
             )
             result.stages["format"] = {
                 "cloze_fixed":       format_result.cloze_fixed,
@@ -590,7 +600,11 @@ def run(config: PipelineConfig, on_progress: callable = None) -> PipelineResult:
             errors.append(f"Format: {e}")
 
     # ── Step 7: Score and sort ─────────────────────────────────────────────────
-    final_cards = score_cards(final_cards, lang=config.lang)
+    # The score is a medical heuristic (rewards bullets, 💡, digits, "which/where" questions)
+    # and re-orders the deck by it. A textbook deck keeps the book's own order: that is
+    # the order the learner meets the words in, and new cards are shown in import order.
+    if profile != "german":
+        final_cards = score_cards(final_cards, lang=config.lang)
 
     # ── Step 8: Save ───────────────────────────────────────────────────────────
     # The filter / quality / format passes let a model rewrite the cards and it may
@@ -634,6 +648,7 @@ def run_youtube(
     run_quality:  bool = True,
     on_progress:  callable = None,
     source_links: bool = True,
+    profile:      str  = "medical",
 ) -> PipelineResult:
     return run(PipelineConfig(
         source       = "youtube",
@@ -644,6 +659,7 @@ def run_youtube(
         run_quality  = run_quality,
         on_progress  = on_progress,
         source_links = source_links,
+        profile      = profile,
     ), on_progress=on_progress)
 
 
@@ -656,6 +672,7 @@ def run_pdf(
     run_filter:   bool = True,
     run_quality:  bool = True,
     on_progress:  callable = None,
+    profile:      str  = "medical",
 ) -> PipelineResult:
     return run(PipelineConfig(
         source      = "pdf",
@@ -667,6 +684,7 @@ def run_pdf(
         run_filter  = run_filter,
         run_quality = run_quality,
         on_progress = on_progress,
+        profile     = profile,
     ), on_progress=on_progress)
 
 
@@ -677,6 +695,7 @@ def run_video(
     run_filter:   bool = True,
     run_quality:  bool = True,
     on_progress:  callable = None,
+    profile:      str  = "medical",
 ) -> PipelineResult:
     return run(PipelineConfig(
         source      = "video",
@@ -686,6 +705,7 @@ def run_video(
         run_filter  = run_filter,
         run_quality = run_quality,
         on_progress = on_progress,
+        profile     = profile,
     ), on_progress=on_progress)
 
 

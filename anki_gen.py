@@ -9,6 +9,7 @@ import json
 import time
 
 from cards_json import parse_cards
+from profiles import GERMAN_SYSTEM_PROMPT, build_explanation_instruction
 
 # ── IMPORTS ────────────────────────────────────────────────────────────────────
 
@@ -51,6 +52,17 @@ def build_language_instruction(lang: str) -> str:
     if lang == "de":
         return 'Write every "front" and "back" field in German (Deutsch).'
     return 'Write every "front" and "back" field in English.'
+
+
+def build_profile_instruction(lang: str, profile: str = "medical") -> str:
+    """
+    The LANGUAGE rule for a prompt. For a medical deck "Card language" is the language of the
+    whole card; for a German deck it is only the language of the translations (the German
+    itself must stay German) — see profiles.build_explanation_instruction.
+    """
+    if profile == "german":
+        return build_explanation_instruction(lang)
+    return build_language_instruction(lang)
 
 
 SYSTEM_PROMPT = """\
@@ -307,6 +319,7 @@ def generate_cards(
     chunk_total: int = 1,
     topic:       str = "general",
     lang:        str = "en",
+    profile:     str = "medical",
 ) -> list[dict]:
     """
     Generate Anki cards from a text chunk using Gemini.
@@ -320,15 +333,18 @@ def generate_cards(
         topic:       topic hint from pipeline (improves quality)
         lang:        output card language — "en" | "ru" | "de" | "uz"
                      ("uz" writes Cyrillic script, see build_language_instruction)
+        profile:     "medical" (default) | "german" (textbook vocabulary & grammar,
+                     see profiles.py) — selects the prompt
 
     Returns:
         list of card dicts with keys: front, back, type, tags
     """
-    system = SYSTEM_PROMPT.format(
+    template = GERMAN_SYSTEM_PROMPT if profile == "german" else SYSTEM_PROMPT
+    system = template.format(
         chunk_index=chunk_index,
         chunk_total=chunk_total,
         topic=topic,
-        language_instruction=build_language_instruction(lang),
+        language_instruction=build_profile_instruction(lang, profile),
     )
 
     prompt = (

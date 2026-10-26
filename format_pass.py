@@ -184,6 +184,7 @@ def format_cards(
     deck:         str,
     groq_api_key: str = "",
     lang:         str = "en",
+    profile:      str = "medical",
 ) -> tuple[list[dict], FormatResult]:
     """
     Run the dedicated format-quality pass, then validate + repair every
@@ -193,7 +194,13 @@ def format_cards(
     _enforce_uz_cyrillic below) for the same reason the cloze repair exists:
     the generation/quality prompts ask the model to write Cyrillic Uzbek,
     but nothing guarantees compliance short of checking locally.
+
+    That safety net is for medical decks only. A "german" deck keeps German words on
+    the front by design, and transliterating any field without Cyrillic would turn
+    "der Arzt" into "дер Арзт".
     """
+    enforce_uz = (lang == "uz" and profile != "german")
+
     if not cards:
         return [], FormatResult(cards_in=0, cards_out=0)
 
@@ -202,7 +209,7 @@ def format_cards(
         # since those cost nothing and catch the worst failure modes.
         result = FormatResult(cards_in=len(cards), cards_out=len(cards))
         cards  = _validate_and_repair(cards, result)
-        if lang == "uz":
+        if enforce_uz:
             cards = _enforce_uz_cyrillic(cards, result)
         return cards, result
 
@@ -230,7 +237,7 @@ def format_cards(
 
     result = FormatResult(cards_in=cards_in, cards_out=len(all_formatted))
     all_formatted = _validate_and_repair(all_formatted, result)
-    if lang == "uz":
+    if enforce_uz:
         all_formatted = _enforce_uz_cyrillic(all_formatted, result)
 
     print(f"\n  {result.summary()}")
