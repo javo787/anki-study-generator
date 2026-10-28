@@ -64,12 +64,17 @@ CARD QUALITY RULES:
 5. Skip filler, greetings, meta-commentary from the transcript
 6. You are processing chunk {chunk_index} of {chunk_total} — do NOT repeat cards from previous chunks
 7. Topic of this chunk: {topic}
-8. Minimum 15 cards, maximum 35 cards per chunk
+8. Number of cards follows the content: one card per distinct testable fact, up to 35 per chunk.
+   NEVER pad to reach a number — if the segment has few testable facts (intro, recap, housekeeping),
+   return only those few cards.
 9. FORMATTING: use HTML only, never markdown (no **bold**, use <b>bold</b>)
 10. For "type": "cloze" cards, "front" MUST contain real Anki cloze syntax
     {{{{c1::answer}}}} — NEVER "___" placeholders. Anki only creates a card
     for each {{{{cN::...}}}} it finds in the text; without it, no card is made at all.
 11. LANGUAGE: {language_instruction}
+12. The text is an automatic speech-recognition transcript: it may lack punctuation and medical terms
+    are often misspelled (e.g. "coroid plexus" = "choroid plexus"). Write every term with its correct
+    standard spelling. Correct spelling only — never add or change facts the lecturer did not state.
 
 OUTPUT: JSON only — no markdown fences, no explanation, no preamble.
 
@@ -92,19 +97,42 @@ OUTPUT: JSON only — no markdown fences, no explanation, no preamble.
 
 # ── TRANSCRIPT ─────────────────────────────────────────────────────────────────
 
+_VIDEO_ID = re.compile(r"[A-Za-z0-9_-]{11}")
+_YT_HOSTS = {"youtube.com", "youtube-nocookie.com"}
+
+
 def extract_video_id(url: str) -> str:
-    """Extract YouTube video ID from any URL format."""
-    patterns = [
-        r"youtu\.be/([A-Za-z0-9_-]{11})",
-        r"v=([A-Za-z0-9_-]{11})",
-        r"embed/([A-Za-z0-9_-]{11})",
-    ]
-    for p in patterns:
-        m = re.search(p, url)
-        if m:
-            return m.group(1)
-    if re.fullmatch(r"[A-Za-z0-9_-]{11}", url.strip()):
-        return url.strip()
+    """
+    Extract the YouTube video ID from a URL (or accept a bare 11-character ID).
+
+    Handles watch?v=, youtu.be/, /embed/, /shorts/, /live/, /v/ and music./m.
+    subdomains, with any extra query parameters. Anything that is not a YouTube
+    video URL (other sites, playlists, channels) raises ValueError instead of
+    guessing — the old regex search happily took "abv=XXXXXXXXXXX" or any
+    site's "?v=" for a video id.
+    """
+    from urllib.parse import parse_qs, urlparse
+
+    raw = (url or "").strip()
+    if _VIDEO_ID.fullmatch(raw):
+        return raw
+
+    parsed = urlparse(raw if "://" in raw else "https://" + raw)
+    host = (parsed.hostname or "").lower()
+    host = host[4:] if host.startswith("www.") else host
+    segments = [s for s in parsed.path.split("/") if s]
+
+    candidate = None
+    if host == "youtu.be":
+        candidate = segments[0] if segments else None
+    elif host in _YT_HOSTS or host.endswith(".youtube.com") or host.endswith(".youtube-nocookie.com"):
+        if segments and segments[0] == "watch":
+            candidate = (parse_qs(parsed.query).get("v") or [None])[0]
+        elif len(segments) >= 2 and segments[0] in ("embed", "shorts", "live", "v", "e"):
+            candidate = segments[1]
+
+    if candidate and _VIDEO_ID.fullmatch(candidate):
+        return candidate
     raise ValueError(f"Cannot extract video ID from: {url}")
 
 
@@ -145,6 +173,23 @@ def build_proxy_config(cfg: dict):
     except InvalidProxyConfig as e:
         print(f"  ⚠️  Proxy config ignored (invalid): {e}")
     return None
+
+
+# YouTube captions carry non-speech noise that would otherwise end up inside the
+# text the model reads: "[Music]", "[Applause]", "[ __ ]", ">>" speaker changes, ♪.
+# Square brackets are only stripped when they hold plain words (no digits/symbols),
+# so notation such as "[Ca2+]" is left alone.
+_SOUND_TAG = re.compile(r"\[[A-Za-z _,'\-]{1,40}\]")
+_MUSIC     = re.compile(r"[♪♫]+")
+_SPEAKER   = re.compile(r">{2,}")
+
+
+def _clean_caption(text: str) -> str:
+    """One caption line -> clean spoken text ('' if nothing spoken is left)."""
+    text = _SOUND_TAG.sub(" ", text or "")
+    text = _MUSIC.sub(" ", text)
+    text = _SPEAKER.sub(" ", text)
+    return " ".join(text.split())
 
 
 def get_transcript_entries(
@@ -188,11 +233,12 @@ def get_transcript_entries(
     fetcher   = YouTubeTranscriptApi(proxy_config=proxy_config)
 
     def _entries(fetched) -> list[dict]:
-        return [
-            {"text": e.text.strip(), "start": e.start, "duration": e.duration}
-            for e in fetched
-            if e.text.strip()
-        ]
+        out = []
+        for e in fetched:
+            text = _clean_caption(e.text)
+            if text:
+                out.append({"text": text, "start": e.start, "duration": e.duration})
+        return out
 
     # ── 1. Direct match ────────────────────────────────────────────────────
     try:

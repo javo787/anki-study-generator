@@ -113,6 +113,7 @@ input:focus { border-color: #6c8ef5; }
 .stat-label { font-size: 11px; color: #4caf82; margin-top: 2px; }
 .stages-summary { background: #0f0f0f; border-radius: 6px; padding: 10px 12px; margin-bottom: 1rem; font-size: 12px; color: #666; }
 .stages-summary span { color: #aaa; }
+.coverage-warn { background: #1f1405; border: 1px solid #5a3a0a; color: #f0b060; border-radius: 6px; padding: 10px 12px; margin-bottom: 1rem; font-size: 12px; line-height: 1.6; }
 .preview-list { list-style: none; }
 .preview-item { padding: 9px 0; border-bottom: 1px solid #1a2a1a; }
 .preview-item:last-child { border-bottom: none; }
@@ -392,6 +393,7 @@ input:focus { border-color: #6c8ef5; }
     <div class="result-card" id="resultCard">
       <div class="result-stats" id="resultStats"></div>
       <div class="stages-summary" id="stagesSummary"></div>
+      <div class="coverage-warn" id="coverageWarn" style="display:none"></div>
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
         <div style="font-size:12px;color:#555">Preview (first 3 cards)</div>
         <button class="btn btn-secondary" id="dlBtn" onclick="downloadResult()" style="padding:6px 12px;font-size:12px">
@@ -781,10 +783,22 @@ function showResult(data) {
     ? ` &nbsp;|&nbsp; <span>Cyrillic fallback:</span> ${fmt.uz_transliterated} fields`
     : '';
   document.getElementById('stagesSummary').innerHTML =
-    `<span>Generate:</span> ${gen.cards || 0} cards from ${gen.chunks || 0} chunks &nbsp;|&nbsp; ` +
+    `<span>Generate:</span> ${gen.cards || 0} cards from ${gen.chunks || 0}${gen.chunks_total ? ' of ' + gen.chunks_total : ''} chunks &nbsp;|&nbsp; ` +
     `<span>Filter:</span> ${fil.cards_in || 0}→${fil.cards_out || 0} &nbsp;|&nbsp; ` +
     `<span>Quality:</span> +${qua.mnemonics_added || 0} mnemonics &nbsp;|&nbsp; ` +
     `<span>Model:</span> ${qua.model_used || 'n/a'}${uzNote}`;
+
+  // Partial coverage / step errors must never look like a clean success
+  const warn = document.getElementById('coverageWarn');
+  warn.textContent = '';
+  const errs = data.errors || [];
+  errs.forEach((msg, i) => {
+    const line = document.createElement('div');
+    line.textContent = (i === 0 ? '⚠️ ' : '• ') + msg;
+    if (i === 0) line.style.fontWeight = '600';
+    warn.appendChild(line);
+  });
+  warn.style.display = errs.length ? 'block' : 'none';
 
   // Preview
   const list = document.getElementById('previewList');
