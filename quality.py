@@ -14,11 +14,16 @@ try:
 except ImportError:
     sys.exit("❌  Run: pip install google-genai")
 
+from profiles import GERMAN_QUALITY_SYSTEM
+
 try:
-    from anki_gen import build_language_instruction
+    from anki_gen import build_language_instruction, build_profile_instruction
 except ImportError:
     def build_language_instruction(lang: str) -> str:   # pragma: no cover — fallback if run standalone
         return "Write every \"front\" and \"back\" field in English."
+
+    def build_profile_instruction(lang: str, profile: str = "medical") -> str:   # pragma: no cover
+        return build_language_instruction(lang)
 
 GEMINI_PRO_MODEL   = "gemini-2.5-pro"
 GEMINI_FLASH_MODEL = "gemini-2.5-flash"
@@ -83,15 +88,16 @@ OUTPUT: JSON only — no markdown.
 }}"""
 
 
-def _process_batch(cards, deck, client, model, lang="en"):
+def _process_batch(cards, deck, client, model, lang="en", profile="medical"):
     prompt = (
         f"Review and improve these {len(cards)} Anki cards.\n"
         f"Deck: {deck}\n\n"
         f"Cards:\n{json.dumps(cards, indent=2, ensure_ascii=False)}\n\n"
         f"Return improved cards as JSON only."
     )
-    system_instruction = QUALITY_SYSTEM.format(
-        language_instruction=build_language_instruction(lang)
+    template = GERMAN_QUALITY_SYSTEM if profile == "german" else QUALITY_SYSTEM
+    system_instruction = template.format(
+        language_instruction=build_profile_instruction(lang, profile)
     )
 
     for attempt in range(1, MAX_RETRY + 1):
@@ -149,6 +155,7 @@ def improve_cards(
     api_key: str  = "",
     use_pro: bool = True,
     lang:    str  = "en",
+    profile: str  = "medical",
 ) -> tuple:
     if not cards:
         return [], QualityResult(cards_in=0, cards_out=0)
@@ -183,7 +190,7 @@ def improve_cards(
 
         print(f"  🔄  Quality batch {i}/{len(batches)}...", end=" ", flush=True)
         try:
-            improved, mnemonics, phrasing = _process_batch(batch, deck, client, model, lang)
+            improved, mnemonics, phrasing = _process_batch(batch, deck, client, model, lang, profile)
             model_used = model
         except RuntimeError as e:
             if use_pro:
@@ -191,7 +198,7 @@ def improve_cards(
                 model      = GEMINI_FLASH_MODEL
                 model_used = model
                 try:
-                    improved, mnemonics, phrasing = _process_batch(batch, deck, client, model, lang)
+                    improved, mnemonics, phrasing = _process_batch(batch, deck, client, model, lang, profile)
                 except Exception as e2:
                     print(f"skipped ({e2.__class__.__name__})")
                     improved, mnemonics, phrasing = batch, 0, 0

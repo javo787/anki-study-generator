@@ -23,6 +23,7 @@ except ImportError:
     sys.exit("❌  Run: pip install flask flask-cors")
 
 from pipeline import run_youtube, run_pdf, run_video, PipelineConfig, save_cards
+from profiles import normalize_profile
 from usage    import get_all_usage, reset_usage, print_usage
 from config   import load_config, save_config, mask_key
 
@@ -149,6 +150,11 @@ def route_youtube():
     url  = data.get("youtube_url", "").strip()
     deck = data.get("deck", "My Deck").strip()
     lang = data.get("lang", "en")
+    try:
+        profile = normalize_profile(data.get("profile"))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
     session_id = data.get("session_id", "default")
 
     if not url:
@@ -166,6 +172,7 @@ def route_youtube():
             run_quality  = data.get("run_quality", True),
             on_progress  = on_progress,
             source_links = data.get("source_links", True),
+            profile      = profile,
         )
         return jsonify({
             "ok":       True,
@@ -190,6 +197,10 @@ def route_pdf():
     pdf_path  = data.get("pdf_path", "").strip().strip('"')
     deck      = data.get("deck", "My Deck").strip()
     lang      = data.get("lang", "en")
+    try:
+        profile = normalize_profile(data.get("profile"))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     page_from = int(data.get("page_from", 1))
     page_to   = int(data.get("page_to", 99999))
     session_id = data.get("session_id", "default")
@@ -214,6 +225,7 @@ def route_pdf():
             run_filter  = data.get("run_filter",  True),
             run_quality = data.get("run_quality", True),
             on_progress = on_progress,
+            profile     = profile,
         )
         return jsonify({
             "ok":       True,
@@ -244,6 +256,10 @@ def route_video():
     video_path = data.get("video_path", "").strip().strip('"')
     deck       = data.get("deck", "My Deck").strip()
     lang       = data.get("lang", "en")
+    try:
+        profile = normalize_profile(data.get("profile"))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     session_id = data.get("session_id", "default")
 
     if not video_path:
@@ -264,6 +280,7 @@ def route_video():
             run_filter  = data.get("run_filter",  True),
             run_quality = data.get("run_quality", True),
             on_progress = on_progress,
+            profile     = profile,
         )
         return jsonify({
             "ok":       True,

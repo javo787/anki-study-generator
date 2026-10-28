@@ -34,9 +34,12 @@ try:
         deduplicate,
         build_client as build_gemini,
         build_language_instruction,
+        build_profile_instruction,
     )
 except ImportError:
     sys.exit("❌  anki_gen.py not found in the same directory")
+
+from profiles import GERMAN_FALLBACK_PROMPT, GERMAN_TOPIC_PROMPT
 
 # ── CONSTANTS ──────────────────────────────────────────────────────────────────
 
@@ -69,7 +72,7 @@ def _retry_delay_seconds(err: str):
     return float(m.group(1)) if m else None
 
 
-def _transcript_language_priority(lang: str) -> list[str]:
+def _transcript_language_priority(lang: str, profile: str = "medical") -> list[str]:
     """
     Which YouTube caption track(s) to look for, in priority order, for a
     given "Card language" choice. A native transcript in the target
@@ -79,9 +82,16 @@ def _transcript_language_priority(lang: str) -> list[str]:
     anki_gen.py — including translating whatever track IS available).
     """
     lang = (lang or "en").lower()
-    if lang == "en":
-        return ["en"]
-    return [lang, "en"]
+    order = [lang, "en"] if lang != "en" else ["en"]
+    if profile == "german":
+        # a German lesson is best studied from its own German captions, whatever
+        # language the cards' translations will be in
+        order = ["de"] + order
+    seen = []
+    for code in order:
+        if code not in seen:
+            seen.append(code)
+    return seen
 
 # ── DATA CLASSES ───────────────────────────────────────────────────────────────
 
@@ -175,7 +185,7 @@ def build_nvidia_client(api_key: str) -> AIClient:
 
 # ── TOPIC DETECTION ────────────────────────────────────────────────────────────
 
-def detect_topic(chunk: Chunk, gemini_client: AIClient) -> str:
+def detect_topic(chunk: Chunk, gemini_client: AIClient, profile: str = "medical") -> str:
     """
     Ask Gemini Flash to name the topic of a chunk in 4-6 words.
     Falls back to time label or page range if AI fails.
@@ -184,7 +194,7 @@ def detect_topic(chunk: Chunk, gemini_client: AIClient) -> str:
     try:
         response = gemini_client.client.models.generate_content(
             model=gemini_client.model,
-            contents=f"{TOPIC_PROMPT}\n\nText:\n{preview}",
+            contents=f"{GERMAN_TOPIC_PROMPT if profile == 'german' else TOPIC_PROMPT}\n\nText:\n{preview}",
             config={"temperature": 0.1},
         )
         topic = response.text.strip().strip("\"'.,")
@@ -229,13 +239,13 @@ def _parse_response(raw: str) -> list[dict]:
     return parse_cards(raw)
 
 
-def _generate_with_groq(chunk: Chunk, deck: str, ai: AIClient, lang: str = "en") -> list[dict]:
+def _generate_with_groq(chunk: Chunk, deck: str, ai: AIClient, lang: str = "en", profile: str = "medical") -> list[dict]:
     """Generate cards using Groq API."""
-    system = GROQ_CARD_PROMPT.format(
+    system = (GERMAN_FALLBACK_PROMPT if profile == "german" else GROQ_CARD_PROMPT).format(
         topic=chunk.topic_hint or "general",
         chunk_index=chunk.index,
         chunk_total=chunk.total,
-        language_instruction=build_language_instruction(lang),
+        language_instruction=build_profile_instruction(lang, profile),
     )
     prompt = (
         f"Deck: {deck}\n\n"
@@ -258,13 +268,13 @@ def _generate_with_groq(chunk: Chunk, deck: str, ai: AIClient, lang: str = "en")
         raise RuntimeError(f"Groq error: {e}")
 
 
-def _generate_with_openrouter(chunk: Chunk, deck: str, ai: AIClient, lang: str = "en") -> list[dict]:
+def _generate_with_openrouter(chunk: Chunk, deck: str, ai: AIClient, lang: str = "en", profile: str = "medical") -> list[dict]:
     """Generate cards using OpenRouter API (OpenAI-compatible)."""
-    system = GROQ_CARD_PROMPT.format(
+    system = (GERMAN_FALLBACK_PROMPT if profile == "german" else GROQ_CARD_PROMPT).format(
         topic=chunk.topic_hint or "general",
         chunk_index=chunk.index,
         chunk_total=chunk.total,
-        language_instruction=build_language_instruction(lang),
+        language_instruction=build_profile_instruction(lang, profile),
     )
     prompt = (
         f"Deck: {deck}\n\n"
@@ -292,6 +302,7 @@ def generate_chunk(
     deck:    str,
     clients: list[AIClient],
     lang:    str = "en",
+    profile: str = "medical",
 ) -> tuple[list[dict], str]:
 
     sorted_clients   = sorted(clients, key=lambda c: c.priority)
@@ -312,6 +323,7 @@ def generate_chunk(
                     chunk_total = chunk.total,
                     topic       = chunk.topic_hint or "general",
                     lang        = lang,
+                    profile     = profile,
                 )
                 if cards:
                     return cards, ai.name
@@ -354,9 +366,9 @@ def generate_chunk(
     for ai in fallback_clients:
         try:
             if ai.provider in ("openrouter", "nvidia"):
-                cards = _generate_with_openrouter(chunk, deck, ai, lang)
+                cards = _generate_with_openrouter(chunk, deck, ai, lang, profile)
             elif ai.provider == "groq":
-                cards = _generate_with_groq(chunk, deck, ai, lang)
+                cards = _generate_with_groq(chunk, deck, ai, lang, profile)
             else:
                 continue
 
@@ -386,6 +398,7 @@ def generate_from_youtube(
     on_progress:    callable = None,
     lang:           str = "en",
     proxy_config=None,
+    profile:        str = "medical",
 ) -> GenerationResult:
     """
     Full pipeline: YouTube URL → smart chunks → cards.
@@ -408,7 +421,7 @@ def generate_from_youtube(
     video_id = extract_video_id(url)
     entries  = get_transcript_entries(
         video_id,
-        languages=_transcript_language_priority(lang),
+        languages=_transcript_language_priority(lang, profile),
         proxy_config=proxy_config,
     )
 
@@ -418,7 +431,7 @@ def generate_from_youtube(
         chunk.video_id = video_id          # lets each card link back to its moment in the video
     print(f"  📦  {len(chunks)} chunks from transcript")
 
-    return _run_pipeline(chunks, deck, clients, detect_topics, on_progress, lang)
+    return _run_pipeline(chunks, deck, clients, detect_topics, on_progress, lang, profile)
 
 
 def generate_from_pdf(
@@ -430,6 +443,7 @@ def generate_from_pdf(
     detect_topics:  bool = True,
     on_progress:    callable = None,
     lang:           str = "en",
+    profile:        str = "medical",
 ) -> GenerationResult:
     """
     Full pipeline: PDF → smart chunks → cards.
@@ -438,7 +452,7 @@ def generate_from_pdf(
     chunks = chunk_pdf(path, page_from, page_to)
     print(f"  📦  {len(chunks)} chunks from PDF")
 
-    return _run_pipeline(chunks, deck, clients, detect_topics, on_progress, lang)
+    return _run_pipeline(chunks, deck, clients, detect_topics, on_progress, lang, profile)
 
 
 def _chunk_label(chunk: Chunk) -> str:
@@ -455,6 +469,7 @@ def _run_pipeline(
     detect_topics:  bool,
     on_progress:    callable,
     lang:           str = "en",
+    profile:        str = "medical",
 ) -> GenerationResult:
     """Internal: run generation pipeline on a list of chunks."""
 
@@ -491,14 +506,14 @@ def _run_pipeline(
 
         # Step 3: detect topic
         if detect_topics and primary_gemini:
-            chunk.topic_hint = detect_topic(chunk, primary_gemini)
+            chunk.topic_hint = detect_topic(chunk, primary_gemini, profile)
             print(f"  🏷️   Chunk {chunk.index}/{chunk.total}: {chunk.topic_hint}")
         else:
             chunk.topic_hint = _fallback_topic(chunk)
 
         # Step 4: generate cards
         print(f"  🔄  Generating chunk {chunk.index}/{chunk.total}...", end=" ", flush=True)
-        cards, provider = generate_chunk(chunk, deck, clients, lang)
+        cards, provider = generate_chunk(chunk, deck, clients, lang, profile)
         print(f"{len(cards)} cards [{provider}]")
 
         if cards:
@@ -519,7 +534,7 @@ def _run_pipeline(
         still_failing = []
         for chunk in pending:
             print(f"  🔄  Retrying chunk {chunk.index}/{chunk.total}...", end=" ", flush=True)
-            cards, provider = generate_chunk(chunk, deck, clients, lang)
+            cards, provider = generate_chunk(chunk, deck, clients, lang, profile)
             print(f"{len(cards)} cards [{provider}]")
             if cards:
                 _accept(chunk, cards, provider)
