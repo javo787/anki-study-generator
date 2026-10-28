@@ -1,0 +1,9 @@
+# Development / test dependencies — install with: pip install -r requirements-dev.txt
+-r requirements.txt
+pytest>=8.0
+
+# Optional but recommended: the real Anki engine. tests/test_anki_import.py uses
+# it to import the generated .txt exactly like Anki Desktop does, so a broken
+# export format is caught by a test instead of by a ruined study session.
+# The test is skipped automatically when this package is not installed.
+anki>=24.11

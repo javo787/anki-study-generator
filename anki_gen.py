@@ -8,6 +8,8 @@ import sys
 import json
 import time
 
+from cards_json import parse_cards
+
 # ── IMPORTS ────────────────────────────────────────────────────────────────────
 
 try:
@@ -247,23 +249,8 @@ def get_transcript(video_id: str, languages: list[str] | None = None) -> str:
 # ── CARD GENERATION ────────────────────────────────────────────────────────────
 
 def _parse_response(raw: str) -> list[dict]:
-    """Strip markdown fences and parse JSON — handles all Gemini response formats."""
-    raw = raw.strip()
-    # Remove ```json ... ``` or ``` ... ```
-    raw = re.sub(r"^```(?:json|JSON)?\s*\n?", "", raw)
-    raw = re.sub(r"\n?```\s*$", "", raw)
-    raw = raw.strip()
-
-    # If response starts with { directly
-    if raw.startswith("{"):
-        return json.loads(raw).get("cards", [])
-
-    # Try to find JSON object anywhere in response
-    match = re.search(r"\{.*\}", raw, re.DOTALL)
-    if match:
-        return json.loads(match.group()).get("cards", [])
-
-    return []
+    """Parse the model reply into cards (tolerant: see cards_json.py)."""
+    return parse_cards(raw)
 
 
 def generate_cards(
