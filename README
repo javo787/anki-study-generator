@@ -229,6 +229,23 @@ For a German YouTube lesson the German caption track is tried first.
 
 ---
 
+## YouTube videos without captions
+
+If a video has **no captions at all** (the uploader turned them off or none exist), the audio is
+downloaded with `yt-dlp` and transcribed with **Groq Whisper** — *with timestamps*, so the rest of the
+pipeline (chunking, source links) works exactly as with captions. You need a Groq key in Settings,
+`pip install yt-dlp` and `ffmpeg`. Parts of the audio that could not be transcribed are listed in the
+result ("Audio 10:00–20:00 could not be transcribed"), never silently skipped.
+
+Only "no captions" triggers this. A blocked IP, a private or age-restricted video would fail for the
+audio too, so you get a short message saying what to do instead. Switch the fallback off with
+`"audio_fallback": false` (request / `PipelineConfig`). Whisper detects the spoken language by itself;
+set `"audio_language": "ru"` in `config.json` to force it. (The *Card language* is never sent to
+Whisper — it used to be, which broke the *Local video* tab: Card language = Uzbek told Whisper an English
+lecture was Uzbek.) Videos longer than 5 hours and live streams are refused.
+
+---
+
 ## Source links (YouTube)
 
 Cards made from a YouTube video get a small `▶ mm:ss` link at the end of the back that

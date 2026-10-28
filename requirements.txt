@@ -23,3 +23,7 @@ youtube-transcript-api>=1.2   # YouTube auto-transcript + proxy_config support
                                # this codebase already relies on the 1.x
                                # instance-based YouTubeTranscriptApi().fetch())
 pdfplumber>=0.11               # PDF text extraction
+
+# Videos WITHOUT captions: download the audio and transcribe it (Groq Whisper).
+# Also needs ffmpeg installed on the system. Optional: without it that fallback explains what to install.
+yt-dlp
