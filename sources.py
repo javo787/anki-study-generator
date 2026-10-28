@@ -29,6 +29,9 @@ WINDOW_ENTRIES      = 3      # a card summarises a few consecutive captions (~10
 MIN_SHARED_TOKENS   = 2      # one coincidental word never decides a position
 MIN_SCORE           = 1.0    # summed rarity (1 / number of captions containing the word)
 RESTORE_MIN_JACCARD = 0.3    # how alike a rewritten card must be to its original
+BOILERPLATE_SHARE  = 0.3    # a word in this share of a chunk's cards is card boilerplate ("which", "remember"), not content
+BOILERPLATE_MIN_CARDS = 6   # ... judged only when the chunk has at least this many cards
+RELEVANT_SHARE      = 0.8    # a caption counts as 'where the card starts' if it holds this share of the best caption's match
 
 
 # ── small helpers ───────────────────────────────────────────────────────────────
@@ -63,7 +66,7 @@ def _best_start(card_tokens: set, entries: list, entry_tokens: list, df: Counter
     n = len(entries)
     shared = [card_tokens & toks for toks in entry_tokens]
 
-    best_score, best_first = 0.0, None
+    best_score, best_at, best_window = 0.0, None, None
     for i in range(n):
         window = shared[i:i + WINDOW_ENTRIES]
         union = set().union(*window)
@@ -71,22 +74,44 @@ def _best_start(card_tokens: set, entries: list, entry_tokens: list, df: Counter
             continue
         score = sum(1.0 / df[t] for t in union)
         if score > best_score + 1e-9:                       # strictly better: ties keep the earliest window
-            best_score = score
-            best_first = i + next(k for k, s in enumerate(window) if s)   # first caption that really matches
-    if best_first is None or best_score < MIN_SCORE:
+            best_score, best_at, best_window = score, i, window
+    if best_at is None or best_score < MIN_SCORE:
         return None
-    return entries[best_first]["start"]
+
+    # Which caption of the window does the card start at? The FIRST one that carries a real
+    # share of the match — not merely the first that shares any word: long captions (Whisper
+    # gives whole sentences) share everyday words with their neighbours, and "first caption with
+    # any shared word" used to drag the link one or two sentences back.
+    weights = [sum(1.0 / df[t] for t in s) for s in best_window]
+    top = max(weights)
+    first = next(k for k, w in enumerate(weights) if w >= RELEVANT_SHARE * top)
+    return entries[best_at + first]["start"]
+
+
+def _boilerplate(token_sets: list) -> set:
+    """Words that most cards of a chunk contain ("which", "structure", "remember", ...): they come
+    from how cards are WORDED, not from what the lecturer said. They are rare in a lecture, so
+    two of them landing in one unrelated sentence used to outweigh a short card's real content."""
+    if len(token_sets) < BOILERPLATE_MIN_CARDS:
+        return set()
+    counts = Counter(t for toks in token_sets for t in toks)
+    limit = max(3, BOILERPLATE_SHARE * len(token_sets))
+    return {t for t, k in counts.items() if k >= limit}
 
 
 def locate_cards(cards: list, chunk) -> None:
-    """Set card['t'] (int seconds) on every card generated from `chunk` (a YouTube chunk)."""
+    """Set card['t'] (int seconds) on every card generated from `chunk` (a YouTube chunk).
+    Pass all cards of the chunk at once: card boilerplate is detected across them."""
     entries      = list(getattr(chunk, "entries", None) or [])
     entry_tokens = [content_tokens(e["text"]) for e in entries]
     df           = Counter(t for toks in entry_tokens for t in toks)
     fallback     = int(max(0, chunk.start_time))
 
-    for card in cards:
-        start = _best_start(content_tokens(card_text(card)), entries, entry_tokens, df) if entries else None
+    card_tokens  = [content_tokens(card_text(c)) for c in cards]
+    boilerplate  = _boilerplate(card_tokens)
+
+    for card, tokens in zip(cards, card_tokens):
+        start = _best_start(tokens - boilerplate, entries, entry_tokens, df) if entries else None
         card["t"] = fallback if start is None else int(max(0, start - LEAD_IN_SECONDS))
 
 
