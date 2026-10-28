@@ -39,6 +39,18 @@ def normalize_profile(value) -> str:
     raise ValueError(f"Unknown profile {value!r}. Choose one of: {', '.join(PROFILES)}.")
 
 
+def german_card_cap(chunk_text: str) -> int:
+    """
+    The most cards a chunk of a German textbook may produce.
+
+    A fixed cap of 40 does not fit vocabulary lists: a "Wortschatz" page holds ~100 entries in
+    3.3k characters, so 40 cards covered 40% of them and the rest silently never became cards.
+    The cap now grows with the size of the chunk (about one item per 30 characters, between 40
+    and 120). It is only a ceiling — the prompt still says "never pad".
+    """
+    return max(40, min(120, len(chunk_text or "") // 30))
+
+
 # ── what "Card language" means for a language deck ──────────────────────────────
 
 _KEEP_GERMAN = ("The German words, phrases and example sentences themselves always stay in German "
@@ -99,7 +111,7 @@ RULES
 2. NEVER guess. If you are not sure of an article, a plural or a Perfekt form, leave that part \
 out — a missing detail is better than a wrong one that gets memorised.
 3. Example sentences must be simple (A1-A2) and must not contradict the textbook.
-4. The number of cards follows the content: one card per item worth learning, up to 40 per \
+4. The number of cards follows the content: one card per item worth learning, up to {max_cards} per \
 chunk. NEVER pad to reach a number — if the pages hold little new material, return few cards.
 5. You are processing chunk {chunk_index} of {chunk_total}; its topic is: {topic}
 6. FORMATTING: HTML only, never markdown (no **bold** — use <b>bold</b>; <br> for line breaks).
@@ -144,7 +156,7 @@ syntax, for example "Ich {{{{c1::bin}}}} ins Kino gegangen." — never underscor
 5. NEVER guess an article, plural or Perfekt form — leave it out if you are not sure
 6. Ignore exercise instructions ("Ergänzen Sie ...", "Hören Sie ..."), page/track numbers, \
 headings and the names of people in dialogues
-7. The number of cards follows the content, up to 40. NEVER pad to reach a number
+7. The number of cards follows the content, up to {max_cards}. NEVER pad to reach a number
 8. Topic: {topic} | Chunk {chunk_index} of {chunk_total}
 9. LANGUAGE: {language_instruction}
 10. FORMATTING: HTML only, never markdown (no **bold** — use <b>bold</b>, and <br> for line breaks)

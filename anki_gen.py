@@ -9,7 +9,7 @@ import json
 import time
 
 from cards_json import parse_cards
-from profiles import GERMAN_SYSTEM_PROMPT, build_explanation_instruction
+from profiles import GERMAN_SYSTEM_PROMPT, build_explanation_instruction, german_card_cap
 
 # ── IMPORTS ────────────────────────────────────────────────────────────────────
 
@@ -383,6 +383,7 @@ def generate_cards(
         chunk_total=chunk_total,
         topic=topic,
         language_instruction=build_profile_instruction(lang, profile),
+        max_cards=german_card_cap(chunk),          # only the german templates use it
     )
 
     prompt = (

@@ -24,7 +24,7 @@ import usage
 from chunker import Chunk
 from fakes import (FakeChatClient, FakeGemini, Sleeper, Resp, gemini_client, groq_client)
 
-KW = dict(chunk_index=1, chunk_total=3, topic="Berufe", language_instruction="LANG-INSTRUCTION")
+KW = dict(chunk_index=1, chunk_total=3, topic="Berufe", language_instruction="LANG-INSTRUCTION", max_cards=40)
 
 GERMAN_CARDS = [
     {"front": "der Arzt / die Ärztin", "back": "doctor<br>Plural: die Ärzte<br>Der Arzt untersucht den Patienten.",
@@ -404,3 +404,34 @@ def test_german_deck_imports_into_real_anki_with_umlauts_and_working_cloze(env, 
         assert "{{c1::" in notes[2].fields[0] and "___" not in notes[2].fields[0]   # legacy blank repaired
     finally:
         col.close()
+
+
+
+# ── how many cards a chunk may produce ──────────────────────────────────────────
+
+@pytest.mark.parametrize("chars, cap", [(0, 40), (1000, 40), (1400, 46), (3299, 109), (4200, 120), (5761, 120), (100_000, 120)])
+def test_card_cap_grows_with_the_size_of_the_chunk(chars, cap):
+    assert profiles.german_card_cap("x" * chars) == cap
+
+
+def test_a_dense_vocabulary_chunk_is_not_capped_at_40_cards():
+    """A Wortschatz page: ~100 entries in 3.3k characters. A fixed cap of 40 covered 40% of them."""
+    text = "\n".join(f"der Wort{i}, die Worte – word {i}" for i in range(100))
+    fake = FakeGemini()
+    anki_gen.generate_cards(text, "Deutsch", fake, 1, 4, "Wortschatz", "ru", profile="german")
+    assert f"up to {profiles.german_card_cap(text)} per chunk" in fake.systems[0]
+    assert profiles.german_card_cap(text) > 40 and "up to 40" not in fake.systems[0]
+
+
+@pytest.mark.parametrize("fn", [generator._generate_with_groq, generator._generate_with_openrouter])
+def test_fallback_providers_get_the_same_cap(fn):
+    text = "x" * 3299
+    fb = FakeChatClient()
+    fn(pdf_chunk(text), "Deutsch", groq_client(fb), "ru", "german")
+    assert f"up to {profiles.german_card_cap(text)}." in fb.systems[0] or f"up to {profiles.german_card_cap(text)}," in fb.systems[0]
+
+
+def test_medical_prompts_are_unchanged():
+    fake = FakeGemini()
+    anki_gen.generate_cards("x" * 5000, "Neuro", fake, 1, 2, "CSF", "en")
+    assert "up to 35 per chunk" in fake.systems[0]

@@ -41,7 +41,7 @@ try:
 except ImportError:
     sys.exit("❌  anki_gen.py not found in the same directory")
 
-from profiles import GERMAN_FALLBACK_PROMPT, GERMAN_TOPIC_PROMPT
+from profiles import GERMAN_FALLBACK_PROMPT, GERMAN_TOPIC_PROMPT, german_card_cap
 from sources import format_time
 
 # ── CONSTANTS ──────────────────────────────────────────────────────────────────
@@ -251,6 +251,7 @@ def _generate_with_groq(chunk: Chunk, deck: str, ai: AIClient, lang: str = "en",
         chunk_index=chunk.index,
         chunk_total=chunk.total,
         language_instruction=build_profile_instruction(lang, profile),
+        max_cards=german_card_cap(chunk.text),     # only the german templates use it
     )
     prompt = (
         f"Deck: {deck}\n\n"
@@ -280,6 +281,7 @@ def _generate_with_openrouter(chunk: Chunk, deck: str, ai: AIClient, lang: str =
         chunk_index=chunk.index,
         chunk_total=chunk.total,
         language_instruction=build_profile_instruction(lang, profile),
+        max_cards=german_card_cap(chunk.text),     # only the german templates use it
     )
     prompt = (
         f"Deck: {deck}\n\n"
