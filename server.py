@@ -159,12 +159,13 @@ def route_youtube():
 
     try:
         result = run_youtube(
-            url         = url,
-            deck        = deck,
-            lang        = lang,
-            run_filter  = data.get("run_filter",  True),
-            run_quality = data.get("run_quality", True),
-            on_progress = on_progress,
+            url          = url,
+            deck         = deck,
+            lang         = lang,
+            run_filter   = data.get("run_filter",  True),
+            run_quality  = data.get("run_quality", True),
+            on_progress  = on_progress,
+            source_links = data.get("source_links", True),
         )
         return jsonify({
             "ok":       True,

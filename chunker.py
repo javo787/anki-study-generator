@@ -39,6 +39,8 @@ class Chunk:
     page_from:  int   = 0    # PDF: first page
     page_to:    int   = 0    # PDF: last page
     topic_hint: str   = ""   # filled later by pipeline (Gemini)
+    entries:    list  = field(default_factory=list, repr=False)  # YouTube: the captions inside this chunk
+    video_id:   str   = ""   # YouTube: set by generate_from_youtube (for source links)
 
     @property
     def duration_min(self) -> float:
@@ -122,6 +124,7 @@ def chunk_youtube(entries: list[dict]) -> list[Chunk]:
             "text":       text,
             "start_time": start_time,
             "end_time":   end_time,
+            "entries":    list(segment),
         })
 
     # ── Merge chunks that are too short ───────────────────────────────────────
@@ -137,6 +140,7 @@ def chunk_youtube(entries: list[dict]) -> list[Chunk]:
             # Merge into buffer
             buffer["text"]     += " " + rc["text"]
             buffer["end_time"]  = rc["end_time"]
+            buffer["entries"]   = buffer["entries"] + rc["entries"]
         else:
             merged.append(buffer)
             buffer = rc.copy()
@@ -151,6 +155,7 @@ def chunk_youtube(entries: list[dict]) -> list[Chunk]:
         tail = merged.pop()
         merged[-1]["text"]    += " " + tail["text"]
         merged[-1]["end_time"] = tail["end_time"]
+        merged[-1]["entries"]  = merged[-1]["entries"] + tail["entries"]
 
     # ── Wrap in Chunk dataclass ────────────────────────────────────────────────
     total = len(merged)
@@ -163,6 +168,7 @@ def chunk_youtube(entries: list[dict]) -> list[Chunk]:
             source     = "youtube",
             start_time = m["start_time"],
             end_time   = m["end_time"],
+            entries    = m["entries"],
         ))
 
     return result

@@ -11,6 +11,7 @@ import time
 from dataclasses import dataclass, field
 
 from cards_json import parse_cards
+from sources import locate_cards
 
 # ── IMPORTS ────────────────────────────────────────────────────────────────────
 
@@ -413,6 +414,8 @@ def generate_from_youtube(
 
     # Step 2: smart chunking
     chunks = chunk_youtube(entries)
+    for chunk in chunks:
+        chunk.video_id = video_id          # lets each card link back to its moment in the video
     print(f"  📦  {len(chunks)} chunks from transcript")
 
     return _run_pipeline(chunks, deck, clients, detect_topics, on_progress, lang)
@@ -475,6 +478,8 @@ def _run_pipeline(
                 card.setdefault("tags", [])
                 if safe_tag not in card["tags"]:
                     card["tags"].append(safe_tag)
+        if chunk.source == "youtube" and chunk.video_id:
+            locate_cards(cards, chunk)            # card["t"] = where in the video it was said
         all_cards.extend(cards)
         result.chunks_done += 1
         result.ai_used[provider] = result.ai_used.get(provider, 0) + 1

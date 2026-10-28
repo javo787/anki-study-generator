@@ -20,6 +20,21 @@ def block_entries(n_blocks=5, block_seconds=300, step=5.0, words_per_entry=10, t
     return out
 
 
+_SYL = [c + v for c in "bdfgklmnprstvz" for v in "aeiou"]          # 70 syllables
+
+
+def pseudo(n: int) -> str:
+    """A made-up 6-letter word, different (in its first 5 letters) for every n < 4900."""
+    return _SYL[n % 70] + _SYL[(n // 70) % 70] + _SYL[(n // 4900) % 70]
+
+
+def word_entries(n_entries=120, step=4.0, words_per_entry=5, t0=0.0):
+    """Transcript whose every caption has its own distinctive words, so tests can say
+    exactly which caption a card was 'taken from'."""
+    return [{"text": " ".join(pseudo(k * words_per_entry + j) for j in range(words_per_entry)),
+             "start": t0 + k * step, "duration": step} for k in range(n_entries)]
+
+
 class Resp:
     def __init__(self, text):
         self.text = text
@@ -46,7 +61,8 @@ class FakeGemini:
         if isinstance(outcome, str):
             return Resp(outcome)
         text = contents.split("Transcript:\n", 1)[1].rsplit("\n\nGenerate Anki", 1)[0]
-        cards = [{"front": f"Chunk {idx} card {i}?", "back": f"fact {i}", "type": "basic", "tags": []}
+        cards = [{"front": f"What is {pseudo(idx * 10 + i)} in the {pseudo(idx * 10 + i + 500)} part?",
+                  "back": f"{pseudo(idx * 10 + i + 1000)} {pseudo(idx * 10 + i + 2000)}", "type": "basic", "tags": []}
                  for i in range(3)]
         return Resp(json.dumps({"cards": cards}))
 

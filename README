@@ -208,6 +208,19 @@ python pipeline.py pdf "C:\path\to\book.pdf" "Deck Name" 11 50
 
 ---
 
+## Source links (YouTube)
+
+Cards made from a YouTube video get a small `▶ mm:ss` link at the end of the back that
+opens the video at that moment — one click from a confusing card to the explanation.
+
+The time is found by matching the card against the captions of its chunk (see
+`sources.py`), not asked from the model. Cards written in another language than the
+lecture, or with no confident match, link to the start of their chunk instead (coarse,
+never wrong). Switch it off with `"source_links": false` in the request / `PipelineConfig`.
+Local-video (Whisper) runs have no timestamps and get no links.
+
+---
+
 ## Tests
 
 ```bash
