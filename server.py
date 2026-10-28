@@ -173,6 +173,7 @@ def route_youtube():
             on_progress  = on_progress,
             source_links = data.get("source_links", True),
             profile      = profile,
+            audio_fallback = data.get("audio_fallback", True),
         )
         return jsonify({
             "ok":       True,

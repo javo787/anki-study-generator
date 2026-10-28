@@ -841,7 +841,12 @@ function showError(msg) {
   const card = document.getElementById('resultCard');
   card.style.display = 'block';
   card.className = 'result-card error';
-  card.innerHTML = `<div class="error-msg">❌ ${msg}</div>`;
+  // text, not HTML: messages can carry text from YouTube / the server (e.g. a video's "reason")
+  card.innerHTML = '';
+  const line = document.createElement('div');
+  line.className = 'error-msg';
+  line.textContent = '❌ ' + msg;
+  card.appendChild(line);
   document.getElementById('progressFill').style.width = '0%';
 }
 

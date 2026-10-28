@@ -204,6 +204,60 @@ def _clean_caption(text: str) -> str:
     return " ".join(text.split())
 
 
+class NoCaptionsError(RuntimeError):
+    """The video has no captions at all (turned off, or none exist).
+
+    The one transcript failure that transcribing the AUDIO can fix — every other
+    failure (blocked, private, age-restricted ...) would fail for the audio too."""
+
+
+_CAUSE_STOP = re.compile(r"\s*(?:If you are sure|If this happens)", re.IGNORECASE)
+_CAUSE_START = re.compile(r"This is most likely caused by:\s*", re.IGNORECASE)
+LOCAL_VIDEO_TIP = "Or download the video and use the 'Local video' tab — Whisper transcribes straight from the audio."
+
+
+def _short_cause(exc) -> str:
+    """The one useful sentence of a youtube-transcript-api error (the library appends ~600
+    characters of boilerplate, including a request to open an issue on GitHub)."""
+    text = str(exc)
+    m = _CAUSE_START.search(text)
+    if m:
+        text = text[m.end():]
+    text = _CAUSE_STOP.split(text)[0]
+    return " ".join(text.split())[:160]
+
+
+def describe_transcript_error(exc, proxy_config=None) -> Exception:
+    """Turn a youtube-transcript-api exception into a short error that says what is wrong
+    and what to do. Only 'no captions' becomes NoCaptionsError (see above)."""
+    try:
+        from youtube_transcript_api import _errors as E
+    except ImportError:                                           # pragma: no cover
+        return RuntimeError(f"Could not fetch the transcript: {exc}")
+
+    def is_a(*names):
+        return isinstance(exc, tuple(getattr(E, n) for n in names if hasattr(E, n)))
+
+    if is_a("TranscriptsDisabled", "NoTranscriptFound"):
+        return NoCaptionsError("This video has no captions (the uploader turned them off or none exist).")
+    if is_a("AgeRestricted"):
+        return RuntimeError("This video is age-restricted: YouTube only gives captions to a logged-in account. "
+                            "Download the video and use the 'Local video' tab.")
+    if is_a("VideoUnplayable"):
+        reason = getattr(exc, "reason", None) or _short_cause(exc)
+        return RuntimeError(f"This video cannot be played: {reason}.")
+    if is_a("VideoUnavailable"):
+        return RuntimeError("This video is unavailable (deleted, private or blocked in your region).")
+    if is_a("RequestBlocked", "IpBlocked"):
+        if proxy_config is not None:
+            return RuntimeError("YouTube blocked the request even through your proxy. Try another proxy "
+                                "(residential proxies work best) or wait a while. " + LOCAL_VIDEO_TIP)
+        return RuntimeError("YouTube is blocking transcript requests from this IP (common on cloud/VPN "
+                            "connections). Add a proxy in Settings -> YouTube proxy. " + LOCAL_VIDEO_TIP)
+    return RuntimeError(f"YouTube refused to give the captions ({_short_cause(exc) or exc.__class__.__name__}). "
+                        "Try again later; a proxy (Settings -> YouTube proxy) or the 'Local video' tab are the workarounds.")
+
+
 def get_transcript_entries(
     video_id: str,
     languages: list[str] | None = None,
@@ -279,23 +333,7 @@ def get_transcript_entries(
         return _entries(fetched)
 
     except Exception as e:
-        from youtube_transcript_api._errors import RequestBlocked
-        if isinstance(e, RequestBlocked) and proxy_config is None:
-            raise RuntimeError(
-                f"YouTube is blocking transcript requests from this server's IP "
-                f"(common on Codespaces/cloud hosting — YouTube blocks most "
-                f"datacenter IP ranges outright, this has nothing to do with the "
-                f"video or language). Fix: add a proxy under Settings → YouTube "
-                f"proxy, then try again. 'Local video' also works right now with "
-                f"no setup, since Whisper transcribes from audio directly. "
-                f"({e.__class__.__name__})"
-            )
-        raise RuntimeError(
-            f"Could not fetch a transcript for this video in {languages}: {e}. "
-            f"If this video truly has no captions in these languages, download "
-            f"it and use the 'Local video' source instead — Whisper transcribes "
-            f"straight from audio, so caption availability doesn't matter there."
-        )
+        raise describe_transcript_error(e, proxy_config) from e
 
 
 def get_transcript(video_id: str, languages: list[str] | None = None) -> str:

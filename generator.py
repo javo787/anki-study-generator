@@ -35,11 +35,14 @@ try:
         build_client as build_gemini,
         build_language_instruction,
         build_profile_instruction,
+        NoCaptionsError,
+        LOCAL_VIDEO_TIP,
     )
 except ImportError:
     sys.exit("❌  anki_gen.py not found in the same directory")
 
 from profiles import GERMAN_FALLBACK_PROMPT, GERMAN_TOPIC_PROMPT
+from sources import format_time
 
 # ── CONSTANTS ──────────────────────────────────────────────────────────────────
 
@@ -112,6 +115,8 @@ class GenerationResult:
     errors:       list[str] = field(default_factory=list)
     ai_used:      dict      = field(default_factory=dict)  # provider → count (successful chunks only)
     failed_chunks: list[int] = field(default_factory=list)  # chunk numbers that produced no cards
+    warnings:     list[str] = field(default_factory=list)  # problems that are not a failed chunk (e.g. audio parts)
+    transcript:   str       = "captions"                   # "captions" | "audio" (no captions -> Whisper)
 
     @property
     def success_rate(self) -> float:
@@ -399,6 +404,8 @@ def generate_from_youtube(
     lang:           str = "en",
     proxy_config=None,
     profile:        str = "medical",
+    audio_fallback=None,
+    fallback_hint:  str = "",
 ) -> GenerationResult:
     """
     Full pipeline: YouTube URL → smart chunks → cards.
@@ -415,15 +422,36 @@ def generate_from_youtube(
         proxy_config:  optional youtube_transcript_api ProxyConfig — see
                        anki_gen.build_proxy_config(). Works around YouTube
                        blocking cloud-provider IPs (RequestBlocked).
+        audio_fallback: optional callable(video_id) -> video_gen.AudioTranscript, used ONLY
+                       when the video has no captions at all (NoCaptionsError). Other
+                       failures (blocked, private, age-restricted) would fail for the audio
+                       too, so they are reported instead.
+        fallback_hint: why there is no audio fallback (shown to the user with the error).
     """
     # Step 1: transcript — prefer a native track in the target language,
     # anki_gen.get_transcript_entries() falls back from there if needed.
-    video_id = extract_video_id(url)
-    entries  = get_transcript_entries(
-        video_id,
-        languages=_transcript_language_priority(lang, profile),
-        proxy_config=proxy_config,
-    )
+    video_id   = extract_video_id(url)
+    transcript = "captions"
+    warnings   = []
+    try:
+        entries = get_transcript_entries(
+            video_id,
+            languages=_transcript_language_priority(lang, profile),
+            proxy_config=proxy_config,
+        )
+    except NoCaptionsError as e:
+        if audio_fallback is None:
+            raise NoCaptionsError(" ".join(p for p in (str(e), fallback_hint, LOCAL_VIDEO_TIP) if p)) from e
+        print(f"  🎙️   {e} Transcribing the audio instead...")
+        audio      = audio_fallback(video_id)       # may raise (e.g. yt-dlp missing): the message is for the user
+        entries    = audio.entries
+        transcript = "audio"
+        warnings   = [f"Audio {format_time(a)}–{format_time(b)} could not be transcribed — "
+                      f"that part of the video is missing from the cards."
+                      for a, b in audio.failed_ranges]
+
+    if not entries:
+        raise RuntimeError("No speech was found in this video (the transcript is empty).")
 
     # Step 2: smart chunking
     chunks = chunk_youtube(entries)
@@ -431,7 +459,10 @@ def generate_from_youtube(
         chunk.video_id = video_id          # lets each card link back to its moment in the video
     print(f"  📦  {len(chunks)} chunks from transcript")
 
-    return _run_pipeline(chunks, deck, clients, detect_topics, on_progress, lang, profile)
+    result = _run_pipeline(chunks, deck, clients, detect_topics, on_progress, lang, profile)
+    result.transcript = transcript
+    result.warnings.extend(warnings)
+    return result
 
 
 def generate_from_pdf(

@@ -64,6 +64,7 @@ class PipelineConfig:
     on_progress:  object = None # callback for web UI
     source_links: bool = True   # YouTube: link every card back to its moment in the video
     profile:      str  = "medical"  # "medical" | "german" — what kind of material this is (see profiles.py)
+    audio_fallback: bool = True # YouTube video WITHOUT captions: download + transcribe the audio (Groq Whisper)
 
 
 @dataclass
@@ -261,6 +262,17 @@ def _convert_to_anki_cloze(text: str) -> str:
 
 # ── MAIN PIPELINE ──────────────────────────────────────────────────────────────
 
+def _proxy_url(proxy_config) -> str:
+    """The proxy as a plain URL (for yt-dlp), from the same ProxyConfig the captions use."""
+    if proxy_config is None:
+        return ""
+    try:
+        urls = proxy_config.to_requests_dict()
+    except Exception:
+        return ""
+    return urls.get("https") or urls.get("http") or ""
+
+
 def _usage_key(provider_name: str):
     """Map an AIClient name such as 'Gemini (gemini-2.5-flash)' to the key the
     quota monitor (usage.LIMITS) displays. Names were previously lower-cased into
@@ -327,15 +339,41 @@ def run(config: PipelineConfig, on_progress: callable = None) -> PipelineResult:
 
     try:
         if config.source == "youtube":
+            proxy_config = build_proxy_config(cfg)
+
+            # A video WITHOUT captions: transcribe the audio instead (needs a Groq key,
+            # yt-dlp and ffmpeg). Only "no captions" triggers it — see generate_from_youtube.
+            audio_fallback, fallback_hint = None, ""
+            if not config.audio_fallback:
+                fallback_hint = "Automatic audio transcription is switched off."
+            elif not cfg.get("groq_api_key"):
+                fallback_hint = ("To transcribe the audio automatically, add a Groq key in Settings "
+                                 "(it also needs yt-dlp and ffmpeg).")
+            else:
+                def audio_fallback(video_id):
+                    from video_gen import transcribe_youtube_audio          # lazy: needs the groq package
+                    def _audio_progress(step, total, message):
+                        if on_progress:
+                            on_progress({"stage": "generating", "chunk": 0, "total": 0, "topic": message,
+                                         "pct": round(step / max(total, 1) * 10)})
+                    return transcribe_youtube_audio(
+                        video_id, cfg["groq_api_key"],
+                        language    = cfg.get("audio_language") or None,
+                        proxy_url   = _proxy_url(proxy_config),
+                        on_progress = _audio_progress,
+                    )
+
             gen_result = generate_from_youtube(
-                url           = config.input,
-                deck          = config.deck,
-                clients       = clients,
-                detect_topics = config.detect_topics,
-                on_progress   = _progress,
-                lang          = config.lang,
-                proxy_config  = build_proxy_config(cfg),
-                profile       = profile,
+                url            = config.input,
+                deck           = config.deck,
+                clients        = clients,
+                detect_topics  = config.detect_topics,
+                on_progress    = _progress,
+                lang           = config.lang,
+                proxy_config   = proxy_config,
+                profile        = profile,
+                audio_fallback = audio_fallback,
+                fallback_hint  = fallback_hint,
             )
         elif config.source == "pdf":
             gen_result = generate_from_pdf(
@@ -365,7 +403,10 @@ def run(config: PipelineConfig, on_progress: callable = None) -> PipelineResult:
             transcript = transcribe_local_video(
                 video_path   = config.input,
                 groq_api_key = cfg.get("groq_api_key", ""),
-                language     = config.lang,
+                # the language SPOKEN in the video (None = Whisper detects it) — NOT the card
+                # language: with Card language = Uzbek an English lecture used to be sent to
+                # Whisper as "Uzbek"
+                language     = cfg.get("audio_language") or None,
                 on_progress  = _video_progress,
             )
 
@@ -433,7 +474,9 @@ def run(config: PipelineConfig, on_progress: callable = None) -> PipelineResult:
         "chunks_failed": chunks_failed,
         "coverage_pct":  coverage_pct,
         "ai_used":       gen_result.ai_used,
+        "transcript":    gen_result.transcript,
     }
+    errors.extend(gen_result.warnings)          # e.g. audio parts that could not be transcribed
 
     # A source that is only partly covered must never look like a clean success:
     # the cards from the failed parts are simply absent from the deck.
@@ -649,6 +692,7 @@ def run_youtube(
     on_progress:  callable = None,
     source_links: bool = True,
     profile:      str  = "medical",
+    audio_fallback: bool = True,
 ) -> PipelineResult:
     return run(PipelineConfig(
         source       = "youtube",
@@ -660,6 +704,7 @@ def run_youtube(
         on_progress  = on_progress,
         source_links = source_links,
         profile      = profile,
+        audio_fallback = audio_fallback,
     ), on_progress=on_progress)
 
 

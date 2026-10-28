@@ -296,3 +296,66 @@ def test_server_forwards_the_source_links_option(monkeypatch, body, expected):
     monkeypatch.setattr(server, "run_youtube", fake_run)
     r = server.app.test_client().post("/api/generate/youtube", json={"youtube_url": f"https://youtu.be/{ID}", **body})
     assert r.status_code == 200 and seen["source_links"] is expected
+
+
+# ── long captions (Whisper sentences) share everyday words with their neighbours ─
+
+def test_long_captions_that_share_common_words_do_not_pull_the_link_to_a_neighbour():
+    """Whisper gives whole sentences (10-20 s). A card taken from one of them also shares a few
+    everyday words with the sentences before it; the link must still point at ITS sentence."""
+    common = ["pressure", "fluid", "which", "csf", "structure"]
+    entries = []
+    for k in range(60):
+        unique = [pseudo(k * 12 + j) for j in range(10)]
+        mixed = unique[:4] + [common[(k + j) % 5] for j in range(3)] + unique[4:]
+        entries.append({"text": " ".join(mixed), "start": 100.0 + k * 15.0, "duration": 14.0})
+    chunk = make_chunk(entries)
+    cards = [{"front": " ".join(entries[k]["text"].split()[:4]) + "?", "back": " ".join(entries[k]["text"].split()[4:]),
+              "type": "basic", "tags": []} for k in (7, 23, 41, 58)]
+    sources.locate_cards(cards, chunk)
+    assert [c["t"] for c in cards] == [int(entries[k]["start"]) - 5 for k in (7, 23, 41, 58)]
+
+
+def test_a_fact_spread_over_two_long_captions_still_points_at_the_first_when_both_contribute():
+    entries = [{"text": " ".join(pseudo(k * 6 + j) for j in range(6)), "start": 10.0 * k, "duration": 9.0} for k in range(40)]
+    card = {"front": "x?", "back": " ".join(entries[20]["text"].split()[3:] + entries[21]["text"].split()[:3]),
+            "type": "basic", "tags": []}
+    sources.locate_cards([card], make_chunk(entries))
+    assert card["t"] == int(entries[20]["start"]) - 5
+
+
+# ── card boilerplate must not outvote a short card's real content ───────────────
+
+def test_boilerplate_is_what_most_cards_of_a_chunk_share():
+    cards = [{"front": f"Which structure {pseudo(i)}?", "back": f"{pseudo(100 + i)} remember", "type": "basic", "tags": []} for i in range(8)]
+    from textmatch import card_text, content_tokens
+    bp = sources._boilerplate([content_tokens(card_text(c)) for c in cards])
+    assert {"which", "struc", "remem"} <= bp and not any(pseudo(i)[:5] in bp for i in range(8))
+
+
+def test_with_few_cards_nothing_is_called_boilerplate():
+    from textmatch import content_tokens
+    assert sources._boilerplate([content_tokens("which structure remember")] * (sources.BOILERPLATE_MIN_CARDS - 1)) == set()
+
+
+def test_a_short_card_is_not_dragged_to_an_unrelated_sentence_that_happens_to_use_its_wording():
+    entries = word_entries(60, step=6.0, words_per_entry=5)
+    entries[5]["text"] += " which structure remember"          # an unrelated sentence that uses the cards' wording once
+    chunk = make_chunk(entries)
+    targets = [10, 20, 30, 40, 50, 15, 25, 35]
+    cards = []
+    for k in targets:                                           # every card is worded "Which structure ... remember"
+        w = entries[k]["text"].split()
+        cards.append({"front": f"Which structure {w[0]} {w[1]}?", "back": f"{w[2]} remember", "type": "basic", "tags": []})
+    sources.locate_cards(cards, chunk)
+    assert [c["t"] for c in cards] == [int(entries[k]["start"]) - 5 for k in targets]
+
+
+def test_the_same_short_card_located_alone_still_uses_all_its_words():
+    """(documents the batch behaviour: boilerplate is only judged across a chunk's cards)"""
+    entries = word_entries(60, step=6.0, words_per_entry=5)
+    chunk = make_chunk(entries)
+    w = entries[30]["text"].split()
+    card = {"front": f"Which structure {w[0]} {w[1]}?", "back": f"{w[2]}", "type": "basic", "tags": []}
+    sources.locate_cards([card], chunk)
+    assert card["t"] == int(entries[30]["start"]) - 5
