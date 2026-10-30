@@ -819,7 +819,16 @@ function showResult(data) {
     if (i === 0) line.style.fontWeight = '600';
     warn.appendChild(line);
   });
-  warn.style.display = errs.length ? 'block' : 'none';
+  if (data.report) {
+    const link = document.createElement('div');
+    const a = document.createElement('a');
+    a.href = '/api/download/' + encodeURIComponent(data.report);
+    a.textContent = '📝 Open the change report (before / after of every card the AI changed)';
+    a.style.color = '#f0b060';
+    link.appendChild(a);
+    warn.appendChild(link);
+  }
+  warn.style.display = (errs.length || data.report) ? 'block' : 'none';
 
   // Preview
   const list = document.getElementById('previewList');

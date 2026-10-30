@@ -22,7 +22,7 @@ import profiles
 import quality
 import usage
 from chunker import Chunk
-from fakes import (FakeChatClient, FakeGemini, Sleeper, Resp, gemini_client, groq_client)
+from fakes import (quality_stub, FakeChatClient, FakeGemini, Sleeper, Resp, gemini_client, groq_client)
 
 KW = dict(chunk_index=1, chunk_total=3, topic="Berufe", language_instruction="LANG-INSTRUCTION", max_cards=40)
 
@@ -315,8 +315,7 @@ def test_profile_reaches_every_step(env, monkeypatch):
     monkeypatch.setattr(pipeline, "filter_cards", lambda **kw: seen.update(filter=kw["profile"]) or
                         types.SimpleNamespace(cards_in=2, cards_out=2, reasons={}, _kept_cards=kw["cards"]))
     monkeypatch.setattr(pipeline, "get_kept_cards", lambda r: r._kept_cards)
-    monkeypatch.setattr(pipeline, "improve_cards", lambda **kw: seen.update(quality=kw["profile"]) or
-                        (kw["cards"], types.SimpleNamespace(mnemonics_added=0, phrasing_improved=0, model_used="fake")))
+    monkeypatch.setattr(pipeline, "improve_cards", lambda **kw: seen.update(quality=kw["profile"]) or quality_stub(kw["cards"]))
     real_format = pipeline.format_cards
     monkeypatch.setattr(pipeline, "format_cards", lambda **kw: seen.update(format=kw["profile"]) or real_format(**kw))
     pipeline.run(pipeline.PipelineConfig(source="pdf", input="x.pdf", deck="D", profile="german", lang="ru"))

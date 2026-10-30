@@ -112,3 +112,9 @@ class Sleeper:
 
     def __call__(self, s):
         self.calls.append(s)
+
+
+def quality_stub(cards, **kw):
+    """What improve_cards() returns, for tests that replace it: (cards, a complete QualityResult)."""
+    import quality
+    return cards, quality.QualityResult(cards_in=len(cards), cards_out=len(cards), model_used="fake", **kw)

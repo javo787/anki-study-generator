@@ -29,11 +29,18 @@ def card_text(card: dict) -> str:
     return f"{as_text(card.get('front'))} {as_text(card.get('back'))}"
 
 
+def plain_text(value) -> str:
+    """The readable text of a card field: cloze syntax unwrapped, HTML tags removed, whitespace
+    collapsed (case is kept). What a learner would read, and what a model must not change."""
+    text = _CLOZE.sub(r"\1", as_text(value))
+    return " ".join(_HTML_TAG.sub(" ", text).split())
+
+
 def content_tokens(text: str) -> set:
     """Set of word stems in `text` (markup removed, lower-cased, numbers ignored)."""
     text = _CLOZE.sub(r"\1", as_text(text))
     text = _HTML_TAG.sub(" ", text).lower()
-    return {w[:STEM_LEN] for w in _WORD.findall(text) if len(w) >= 3 and not w.isdigit()}
+    return {w[:STEM_LEN] for w in _WORD.findall(text) if len(w) >= 3 and not w.isdigit() and w.strip("_")}
 
 
 def jaccard(a: set, b: set) -> float:

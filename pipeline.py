@@ -40,6 +40,7 @@ from quality   import improve_cards, score_cards
 from format_pass import format_cards
 from usage     import record, is_available, print_usage, get_all_usage
 from sources   import is_valid_time, restore_times, source_html
+from integrity import REVIEW_TAG, render_changes_report
 from profiles  import normalize_profile
 from config    import load_config
 
@@ -77,6 +78,7 @@ class PipelineResult:
     duration_sec:   float = 0.0
     stages:         dict  = field(default_factory=dict)
     errors:         list  = field(default_factory=list)
+    report:         str   = ""     # path of the quality-check change report (.md), if the quality pass changed anything
 
     def summary(self) -> str:
         mins = self.duration_sec / 60
@@ -145,6 +147,16 @@ def _safe_name(text: str) -> str:
         c if c.isalnum() or c in "-_ " else ""
         for c in text
     ).strip().replace(" ", "_")
+
+
+def save_changes_report(markdown: str, deck: str) -> str:
+    """Write the quality-check change report next to the card file; returns its path."""
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    date_str = datetime.now().strftime("%Y-%m-%d_%H-%M")
+    path = os.path.join(OUTPUT_DIR, f"anki_{_safe_name(deck)}_{date_str}_changes.md")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(markdown)
+    return path
 
 
 def _as_text(value) -> str:
@@ -553,6 +565,7 @@ def run(config: PipelineConfig, on_progress: callable = None) -> PipelineResult:
                 "cards_out": filter_result.cards_out,
                 "reasons":   filter_result.reasons,
             }
+            errors.extend(filter_result.warnings)        # e.g. an implausible mass removal that was ignored
             print(f"\n  ✅  Step 5 complete: {len(filtered_cards)} cards kept\n")
 
         except Exception as e:
@@ -566,7 +579,8 @@ def run(config: PipelineConfig, on_progress: callable = None) -> PipelineResult:
         on_progress({"stage": "filtered", "cards": result.total_filtered, "pct": 70})
 
     # ── Step 6: Quality control ────────────────────────────────────────────────
-    final_cards = filtered_cards
+    final_cards    = filtered_cards
+    quality_result = None
 
     if config.run_quality and cfg.get("gemini_pro_key") and filtered_cards:
         print("  ✨  STEP 6: Gemini Pro quality control\n")
@@ -609,9 +623,38 @@ def run(config: PipelineConfig, on_progress: callable = None) -> PipelineResult:
                 lang    = config.lang,
                 profile = profile,
             )
+            record("gemini_flash", tokens=len(filtered_cards) * 200)
         except Exception as e:
             print(f"  ⚠️  Quality step failed: {e} — skipping")
+            errors.append(f"Quality: {e}")
+            quality_result = None
             final_cards = filtered_cards
+
+    # What did the quality pass change? It is allowed to edit cards, not to do it silently:
+    # changed numbers and corrected facts are tagged `needs_review` and listed in a report.
+    if quality_result is not None:
+        quality_stage = result.stages.setdefault("quality", {
+            "mnemonics_added":   quality_result.mnemonics_added,
+            "phrasing_improved": quality_result.phrasing_improved,
+            "model_used":        quality_result.model_used,
+        })
+        quality_stage.update({
+            "changed":          len(quality_result.changes),
+            "needs_review":     quality_result.needs_review,
+            "rejected_batches": quality_result.rejected_batches,
+        })
+        if quality_result.rejected_batches:
+            errors.append(f"Quality: {quality_result.rejected_batches} batch(es) could not be matched to the "
+                          f"cards — those cards were left exactly as generated.")
+        report = render_changes_report(config.deck, quality_result.changes, len(final_cards))
+        if report:
+            result.report = save_changes_report(report, config.deck)
+            quality_stage["report"] = os.path.basename(result.report)
+            print(f"  📝  Change report: {result.report}")
+        if quality_result.needs_review:
+            errors.append(f"{quality_result.needs_review} card(s) were corrected, or had a number changed, by the AI "
+                          f"quality check and are tagged `{REVIEW_TAG}` — please review them "
+                          f"(see {os.path.basename(result.report)}).")
 
     # ── Step 6.5: Format pass ──────────────────────────────────────────────────
     # Fixes real Anki cloze syntax ({{c1::...}}), converts markdown to HTML,

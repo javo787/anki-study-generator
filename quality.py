@@ -14,7 +14,10 @@ try:
 except ImportError:
     sys.exit("❌  Run: pip install google-genai")
 
+from cards_json import parse_json_object
+from integrity import add_review_tag, describe_change, merge_returned
 from profiles import GERMAN_QUALITY_SYSTEM
+from textmatch import as_text
 
 try:
     from anki_gen import build_language_instruction, build_profile_instruction
@@ -40,12 +43,16 @@ class QualityResult:
     phrasing_improved: int = 0
     errors:            list = field(default_factory=list)
     model_used:        str  = ""
+    changes:           list = field(default_factory=list)   # every card the pass changed (see integrity.describe_change)
+    needs_review:      int  = 0                              # of those: flagged for the learner, tagged needs_review
+    rejected_batches:  int  = 0                              # batches whose answer could not be matched to the cards
 
     def summary(self) -> str:
+        review = f" | NEEDS REVIEW: {self.needs_review}" if self.needs_review else ""
         return (
             f"Quality: {self.cards_in} in → {self.cards_out} out | "
             f"mnemonics added: {self.mnemonics_added} | "
-            f"phrasing improved: {self.phrasing_improved} | "
+            f"phrasing improved: {self.phrasing_improved}{review} | "
             f"model: {self.model_used}"
         )
 
@@ -56,7 +63,9 @@ You are a senior medical educator reviewing Anki flashcards for final quality.
 Your tasks for EACH card:
 1. MNEMONIC — add a 💡 mnemonic if the card has a list of 3+ items AND no mnemonic exists yet
 2. PHRASING — improve vague questions
-3. ACCURACY — fix any medical inaccuracies silently
+3. ACCURACY — if a card states something medically WRONG, fix it, set "fixed_fact": true and say
+   in "note" (at most 15 words) what was wrong. Never change a fact, number or name in any other
+   way. If you are not sure that something is wrong, leave it exactly as it is.
 4. CLOZE FORMAT — for "type": "cloze" cards, "front" MUST use real Anki
    syntax: "What is the outermost meningeal layer?<br><br>{{{{c1::Dura mater}}}}".
    NEVER use "___" placeholders — Anki generates zero cards for a cloze
@@ -68,6 +77,7 @@ Your tasks for EACH card:
    not English by default.
 
 IMPORTANT:
+- Return EVERY card, each with its "id" unchanged
 - Do NOT remove cards
 - Do NOT change card type
 - Do NOT add mnemonics to every card — only where genuinely useful
@@ -77,22 +87,38 @@ OUTPUT: JSON only — no markdown.
 {{
   "cards": [
     {{
+      "id": 0,
       "front": "...",
       "back": "...",
       "type": "basic",
       "tags": ["..."],
       "improved": true,
-      "mnemonic_added": false
+      "mnemonic_added": false,
+      "fixed_fact": false,
+      "note": ""
     }}
   ]
 }}"""
 
 
 def _process_batch(cards, deck, client, model, lang="en", profile="medical"):
+    """
+    One batch through the quality model. Returns (cards, mnemonics, phrasing, changes, rejected).
+
+    The model's answer is MERGED onto the original cards by id (integrity.merge_returned): only
+    front and back can change; type, tags and the source time stay; a card the model dropped keeps
+    its original. What changed — and which changes the learner should review — is measured here
+    (integrity.describe_change), not taken from the model's own claims.
+    """
+    payload = [
+        {"id": i, "front": as_text(c.get("front")), "back": as_text(c.get("back")),
+         "type": c.get("type", "basic"), "tags": c.get("tags", [])}
+        for i, c in enumerate(cards)
+    ]
     prompt = (
         f"Review and improve these {len(cards)} Anki cards.\n"
         f"Deck: {deck}\n\n"
-        f"Cards:\n{json.dumps(cards, indent=2, ensure_ascii=False)}\n\n"
+        f"Cards:\n{json.dumps(payload, indent=2, ensure_ascii=False)}\n\n"
         f"Return improved cards as JSON only."
     )
     template = GERMAN_QUALITY_SYSTEM if profile == "german" else QUALITY_SYSTEM
@@ -107,28 +133,31 @@ def _process_batch(cards, deck, client, model, lang="en", profile="medical"):
                 contents = prompt,
                 config   = {
                     "system_instruction": system_instruction,
-                    "temperature":        0.4,
+                    "temperature":        0.2,     # an editor, not a writer
                 },
             )
-            raw = response.text.strip()
-            raw = re.sub(r"^```(?:json)?\s*", "", raw)
-            raw = re.sub(r"\s*```$", "", raw)
+            data     = parse_json_object(response.text)
+            returned = data.get("cards") if isinstance(data, dict) else None
+            info     = merge_returned(cards, returned, ("front", "back"))
+            if info.rejected:
+                print("  ⚠️  Quality answer could not be matched to the cards — kept as they were")
+                return cards, 0, 0, [], True
+            if info.missing or info.ignored:
+                print(f"  ⚠️  Quality: {info.missing} card(s) not returned (kept as they were), {info.ignored} entry/entries ignored")
 
-            data           = json.loads(raw)
-            improved_cards = data.get("cards", cards)
+            merged, changes = info.cards, []
+            for i, (original, card) in enumerate(zip(cards, merged)):
+                change = describe_change(original, card, info.returned[i])
+                if change is None:
+                    continue
+                change["index"] = i
+                changes.append(change)
+                if change["review"]:
+                    add_review_tag(card)
 
-            mnemonics = sum(1 for c in improved_cards if c.get("mnemonic_added", False))
-            phrasing  = sum(1 for c in improved_cards if c.get("improved", False) and not c.get("mnemonic_added", False))
-
-            for card in improved_cards:
-                card.pop("improved",       None)
-                card.pop("mnemonic_added", None)
-
-            return improved_cards, mnemonics, phrasing
-
-        except json.JSONDecodeError as e:
-            print(f"  ⚠️  Quality JSON parse error: {e}")
-            return cards, 0, 0
+            mnemonics = sum(1 for c in changes if "mnemonic" in c["kinds"])
+            phrasing  = sum(1 for c in changes if c["kinds"] == ["phrasing"])
+            return merged, mnemonics, phrasing, changes, False
 
         except Exception as e:
             err = str(e)
@@ -144,9 +173,9 @@ def _process_batch(cards, deck, client, model, lang="en", profile="medical"):
                 raise RuntimeError(f"Pro unavailable: {err}")
             else:
                 print(f"  ⚠️  Gemini quality error: {err[:80]}")
-                return cards, 0, 0
+                return cards, 0, 0, [], False
 
-    return cards, 0, 0
+    return cards, 0, 0, [], False
 
 
 def improve_cards(
@@ -171,17 +200,19 @@ def improve_cards(
     model      = GEMINI_PRO_MODEL if use_pro else GEMINI_FLASH_MODEL
     cards_in   = len(cards)
     all_improved     = []
+    all_changes      = []
     total_mnemonics  = 0
     total_phrasing   = 0
+    rejected_batches = 0
     errors           = []
     model_used       = model
 
     batches = [cards[i:i + QUALITY_BATCH] for i in range(0, len(cards), QUALITY_BATCH)]
     print(f"\n  ✨  Quality check: {cards_in} cards in {len(batches)} batch(es) [{model}]...")
 
-    # цикл по батчам перед отправкой в Gemini (пример вставки)
+    offset = 0                                   # index of the batch's first card in the whole deck
     for i, batch in enumerate(batches, 1):
-        # Нормализуй перед отправкой в Gemini
+        # Normalize before sending to Gemini (raw model output can give a field as a list)
         for card in batch:
             if isinstance(card.get("back"), list):
                 card["back"] = "\n".join(str(x) for x in card["back"])
@@ -190,7 +221,7 @@ def improve_cards(
 
         print(f"  🔄  Quality batch {i}/{len(batches)}...", end=" ", flush=True)
         try:
-            improved, mnemonics, phrasing = _process_batch(batch, deck, client, model, lang, profile)
+            improved, mnemonics, phrasing, changes, rejected = _process_batch(batch, deck, client, model, lang, profile)
             model_used = model
         except RuntimeError as e:
             if use_pro:
@@ -198,19 +229,25 @@ def improve_cards(
                 model      = GEMINI_FLASH_MODEL
                 model_used = model
                 try:
-                    improved, mnemonics, phrasing = _process_batch(batch, deck, client, model, lang, profile)
+                    improved, mnemonics, phrasing, changes, rejected = _process_batch(batch, deck, client, model, lang, profile)
                 except Exception as e2:
                     print(f"skipped ({e2.__class__.__name__})")
-                    improved, mnemonics, phrasing = batch, 0, 0
+                    improved, mnemonics, phrasing, changes, rejected = batch, 0, 0, [], False
                     errors.append(f"Batch {i}: {str(e2)[:60]}")
             else:
-                improved, mnemonics, phrasing = batch, 0, 0
+                improved, mnemonics, phrasing, changes, rejected = batch, 0, 0, [], False
                 errors.append(f"Batch {i}: {str(e)[:60]}")
 
-        print(f"done (+{mnemonics} mnemonics, +{phrasing} improved)")
+        review = sum(1 for c in changes if c["review"])
+        print(f"done (+{mnemonics} mnemonics, +{phrasing} improved" + (f", {review} to review" if review else "") + ")")
+        for c in changes:
+            c["index"] += offset                 # batch-local -> position in the whole deck
         all_improved    += improved
+        all_changes     += changes
         total_mnemonics += mnemonics
         total_phrasing  += phrasing
+        rejected_batches += 1 if rejected else 0
+        offset          += len(batch)
 
         if i < len(batches):
             time.sleep(3)
@@ -222,6 +259,9 @@ def improve_cards(
         phrasing_improved = total_phrasing,
         errors            = errors,
         model_used        = model_used,
+        changes           = all_changes,
+        needs_review      = sum(1 for c in all_changes if c["review"]),
+        rejected_batches  = rejected_batches,
     )
     print(f"\n  {result.summary()}")
     return all_improved, result

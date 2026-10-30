@@ -13,7 +13,7 @@ import chunker
 import generator
 import pipeline
 import usage
-from fakes import (DAILY_429, RATE_429, FakeChatClient, FakeGemini, Sleeper, block_entries,
+from fakes import (quality_stub, DAILY_429, RATE_429, FakeChatClient, FakeGemini, Sleeper, block_entries,
                    gemini_client, groq_client)
 
 ID = "dQw4w9WgXcQ"
@@ -209,7 +209,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(generator, "get_transcript_entries", lambda *a, **k: block_entries(n_blocks=4))
     monkeypatch.setattr(pipeline, "build_proxy_config", lambda cfg: None)
     monkeypatch.setattr(pipeline, "improve_cards",
-                        lambda **kw: (kw["cards"], types.SimpleNamespace(mnemonics_added=0, phrasing_improved=0, model_used="fake")))
+                        lambda **kw: quality_stub(kw["cards"]))
 
     def configure(cfg, fake):
         monkeypatch.setattr(pipeline, "load_config", lambda: cfg)

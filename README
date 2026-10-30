@@ -208,6 +208,26 @@ python pipeline.py pdf "C:\path\to\book.pdf" "Deck Name" 11 50
 
 ---
 
+## No silent edits (AI changes are checked, tagged and reported)
+
+The filter, quality and format steps all let a model touch your cards. Each one now works under the
+same rules (`integrity.py`): a model may **edit** a card, never **replace** it.
+
+- **Filter** answers only with the ids of the cards to remove. It can no longer rewrite the deck. If it
+  asks to remove more than 60% of a batch of 8+ cards it is ignored as a malfunction and you are told.
+- **Quality** may change cards, but its answer is merged onto your original cards by id (only front and
+  back can change; type, tags and the source-link time stay; a card it forgot keeps its original). What
+  changed is **measured** (a diff, and the numbers in the text), not taken from the model's claims.
+  A card is tagged **`needs_review`** and listed in a report when the model says it corrected a fact,
+  when a **number changed** (even if the model did not say so), or when it was rewritten rather than edited.
+  The report `output/anki_<deck>_<date>_changes.md` shows before / after; in Anki search `tag:needs_review`.
+- **Format** may not change what a card says: an edit that changed a number or the words is reverted.
+
+If a model's answer cannot be matched to the cards at all, those cards stay exactly as generated and the
+result says so.
+
+---
+
 ## Content type (profiles)
 
 Pick **Content type** in the UI (or `"profile"` in the request / `PipelineConfig.profile`):
