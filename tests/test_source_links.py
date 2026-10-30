@@ -14,7 +14,7 @@ import pipeline
 import sources
 import usage
 from chunker import Chunk
-from fakes import (FakeGemini, Sleeper, block_entries, gemini_client, pseudo, word_entries)
+from fakes import (quality_stub, FakeGemini, Sleeper, block_entries, gemini_client, pseudo, word_entries)
 
 ID = "dQw4w9WgXcQ"
 
@@ -247,8 +247,7 @@ def _t_values(rows):
 
 
 def test_pipeline_adds_links_to_every_card_of_a_youtube_run(env, monkeypatch):
-    monkeypatch.setattr(pipeline, "improve_cards", lambda **kw: (kw["cards"], types.SimpleNamespace(
-        mnemonics_added=0, phrasing_improved=0, model_used="fake")))
+    monkeypatch.setattr(pipeline, "improve_cards", lambda **kw: quality_stub(kw["cards"]))
     res = pipeline.run(pipeline.PipelineConfig(source="youtube", input=f"https://youtu.be/{ID}", deck="D",
                                                run_filter=False, run_quality=True))
     rows = _final_rows(res)
@@ -258,8 +257,8 @@ def test_pipeline_adds_links_to_every_card_of_a_youtube_run(env, monkeypatch):
 
 def test_links_survive_quality_rewriting_that_drops_unknown_fields(env, monkeypatch):
     def rewrite(**kw):                                              # like Gemini Pro: new wording, no extra keys
-        return [{"front": "Better: " + c["front"], "back": c["back"] + " 💡 remember", "type": c["type"], "tags": c["tags"]}
-                for c in kw["cards"]], types.SimpleNamespace(mnemonics_added=0, phrasing_improved=9, model_used="fake")
+        return quality_stub([{"front": "Better: " + c["front"], "back": c["back"] + " 💡 remember", "type": c["type"], "tags": c["tags"]}
+                             for c in kw["cards"]])
     monkeypatch.setattr(pipeline, "improve_cards", rewrite)
     res = pipeline.run(pipeline.PipelineConfig(source="youtube", input=f"https://youtu.be/{ID}", deck="D",
                                                run_filter=False, run_quality=True))

@@ -83,3 +83,39 @@ def test_choosing_medical_hides_the_hint_and_the_language_chips_still_work():
     assert _run_chip("profile", "medical")["hint"] == "none"
     got = _run_chip("lang", "uz")
     assert got["lang"] == "uz" and got["profile"] == "medical"
+
+
+# ── change report link ──────────────────────────────────────────────────────────
+
+def _run_with_report(data):
+    js = textwrap.dedent("""
+        const els = {};
+        const mk = () => ({ style: {}, children: [], innerHTML: '', textContent: '', className: '', href: '',
+                            appendChild(c) { this.children.push(c); } });
+        global.document = { getElementById: id => (els[id] ||= mk()), createElement: () => mk() };
+        global.updateProgress = () => {};
+        %s
+        showResult(%s);
+        const w = els.coverageWarn;
+        const links = [];
+        const walk = n => { if (n.href) links.push({ href: n.href, text: n.textContent }); (n.children || []).forEach(walk); };
+        walk(w);
+        console.log(JSON.stringify({ display: w.style.display, links }));
+    """) % (_show_result_source(), json.dumps(data))
+    return json.loads(subprocess.run(["node", "-e", js], capture_output=True, text=True, check=True).stdout)
+
+
+def test_the_change_report_is_offered_as_a_link_even_without_other_warnings():
+    got = _run_with_report({**BASE, "errors": [], "report": "anki_Neuro_2026_changes.md"})
+    assert got["display"] == "block"
+    assert got["links"] == [{"href": "/api/download/anki_Neuro_2026_changes.md", "text": "📝 Open the change report (before / after of every card the AI changed)"}]
+
+
+def test_the_report_name_is_url_encoded():
+    got = _run_with_report({**BASE, "errors": [], "report": "a b&c?.md"})
+    assert got["links"][0]["href"] == "/api/download/a%20b%26c%3F.md"
+
+
+def test_no_report_no_link():
+    got = _run_with_report({**BASE, "errors": [], "report": ""})
+    assert got["links"] == [] and got["display"] == "none"

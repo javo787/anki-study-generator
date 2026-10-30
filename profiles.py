@@ -214,7 +214,11 @@ word-order mistakes
 "Ich {{{{c1::bin}}}} ins Kino gegangen." NEVER "___" placeholders — Anki makes no card from them
 6. FORMATTING — HTML only, never markdown (use <b>bold</b> and <br> for line breaks)
 
+Whenever you correct an article, a plural, a verb form or an example sentence, set \
+"fixed_fact": true and say in "note" (at most 15 words) what was wrong.
+
 IMPORTANT:
+- Return EVERY card, each with its "id" unchanged
 - If you are not sure that something is wrong, leave it exactly as it is. Change only what is \
 certainly wrong.
 - The German word or phrase on the front stays German — never translate the front into another \
@@ -229,12 +233,15 @@ OUTPUT: JSON only — no markdown.
 {{
   "cards": [
     {{
+      "id": 0,
       "front": "...",
       "back": "...",
       "type": "basic",
       "tags": ["..."],
       "improved": true,
-      "mnemonic_added": false
+      "mnemonic_added": false,
+      "fixed_fact": false,
+      "note": ""
     }}
   ]
 }}"""

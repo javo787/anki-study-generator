@@ -37,6 +37,7 @@ class FilterResult:
     cards_out:    int
     removed:      list[dict] = field(default_factory=list)
     reasons:      dict       = field(default_factory=dict)
+    warnings:     list       = field(default_factory=list)   # e.g. an implausible mass removal that was ignored
 
     @property
     def removed_count(self) -> int:
@@ -62,7 +63,7 @@ class FilterResult:
 FILTER_SYSTEM = """\
 You are a strict medical Anki card quality reviewer.
 
-Your job: review a batch of Anki flashcards and return only the HIGH-QUALITY ones.
+Your job: review a batch of Anki flashcards (each has an "id") and point out the LOW-QUALITY ones.
 
 REMOVE a card if ANY of these apply:
 1. TOO VAGUE — front is a general definition ("What is X?", "Define X")
@@ -78,44 +79,52 @@ KEEP a card if ALL of these apply:
 ✓ A medical student would genuinely benefit from this card
 
 OUTPUT: JSON only — no markdown, no explanation.
-{
-  "kept": [
-    {"front": "...", "back": "...", "type": "basic", "tags": [...], "score": 8}
-  ],
-  "removed": [
-    {"front": "...", "reason": "too_vague"}
-  ]
-}
+List ONLY the cards to remove, by their "id". Every card you do not list is kept exactly as
+it is — never rewrite, shorten or re-emit a card. Use an empty list when every card is good.
+{"removed": [{"id": 12, "reason": "too_vague"}]}
 
 Reason codes: too_vague | duplicate | incomplete | trivial | broken"""
 
 
 FILTER_USER = """\
-Review these {count} Anki cards and return only the high-quality ones.
+Review these {count} Anki cards and list the ids of the low-quality ones.
 Deck: {deck}
 
 Cards:
 {cards_json}
 
-Return JSON only."""
+Return JSON only — the ids to remove."""
 
 
 # ── CORE FILTER ────────────────────────────────────────────────────────────────
 
+FILTER_REASONS    = {"too_vague", "duplicate", "incomplete", "trivial", "broken"}
+FILTER_MASS_MIN   = 8      # from this batch size on ...
+FILTER_MASS_RATIO = 0.6    # ... removing more than this share is treated as a malfunction, not a verdict
+
+
 def _filter_batch(
-    cards:  list[dict],
-    deck:   str,
-    client: Groq,
+    cards:    list[dict],
+    deck:     str,
+    client:   Groq,
+    warnings: list = None,
 ) -> tuple[list[dict], list[dict]]:
     """
-    Send one batch to Groq for filtering.
-    Returns: (kept_cards, removed_cards)
+    Send one batch to Groq for filtering. The model answers with the ids of the cards to
+    REMOVE; the survivors are the original card objects, never the model's copies, so a card
+    can neither be rewritten nor silently lost, and fields the model never saw (tags, the
+    source-link time) are untouched.
+
+    Fails open: any unusable answer keeps every card. Returns: (kept_cards, removed_cards)
     """
-    cards_json = json.dumps(cards, indent=2, ensure_ascii=False)
-    prompt     = FILTER_USER.format(
-        count     = len(cards),
-        deck      = deck,
-        cards_json = cards_json,
+    payload = [
+        {"id": i, "front": as_text(c.get("front")), "back": as_text(c.get("back")), "type": c.get("type", "basic")}
+        for i, c in enumerate(cards)
+    ]
+    prompt = FILTER_USER.format(
+        count      = len(cards),
+        deck       = deck,
+        cards_json = json.dumps(payload, indent=2, ensure_ascii=False),
     )
 
     for attempt in range(1, MAX_RETRY + 1):
@@ -128,18 +137,31 @@ def _filter_batch(
                 ],
                 temperature = 0.1,
             )
-            raw = response.choices[0].message.content.strip()
-            raw = re.sub(r"^```(?:json)?\s*", "", raw)
-            raw = re.sub(r"\s*```$", "", raw)
+            data     = parse_json_object(response.choices[0].message.content)
+            verdicts = data.get("removed") if isinstance(data, dict) else None
+            if not isinstance(verdicts, list):
+                print("  ⚠️  Filter answer unusable — keeping every card")
+                return cards, []
 
-            data    = json.loads(raw)
-            kept    = data.get("kept",    [])
-            removed = data.get("removed", [])
+            remove = {}                                   # id -> reason (the first mention of an id wins)
+            for v in verdicts:
+                i      = v.get("id") if isinstance(v, dict) else v
+                reason = v.get("reason") if isinstance(v, dict) else None
+                if isinstance(i, bool) or not isinstance(i, int) or not (0 <= i < len(cards)) or i in remove:
+                    continue
+                remove[i] = reason if reason in FILTER_REASONS else "unknown"
+
+            if len(cards) >= FILTER_MASS_MIN and len(remove) > FILTER_MASS_RATIO * len(cards):
+                msg = (f"The quality filter wanted to remove {len(remove)} of {len(cards)} cards in one batch — "
+                       f"ignored as implausible, the batch was kept.")
+                print(f"  ⚠️  {msg}")
+                if warnings is not None:
+                    warnings.append(msg)
+                return cards, []
+
+            kept    = [c for i, c in enumerate(cards) if i not in remove]
+            removed = [{"front": as_text(cards[i].get("front")), "reason": r} for i, r in remove.items()]
             return kept, removed
-
-        except json.JSONDecodeError as e:
-            print(f"  ⚠️  Filter JSON parse error: {e}")
-            return cards, []   # on parse error — keep all, don't lose cards
 
         except Exception as e:
             err = str(e)
@@ -393,6 +415,7 @@ def filter_cards(
     all_kept   = []
     all_removed = []
     reason_counts = {}
+    warnings    = []
 
     # ── Step 1: quality filter in batches ─────────────────────────────────────
     batches = [
@@ -409,7 +432,7 @@ def filter_cards(
 
     for i, batch in enumerate(batches, 1):
         print(f"  🔄  Filter batch {i}/{len(batches)}...", end=" ", flush=True)
-        kept, removed = _filter_batch(batch, deck, client)
+        kept, removed = _filter_batch(batch, deck, client, warnings)
         print(f"{len(kept)} kept, {len(removed)} removed")
 
         all_kept.extend(kept)
@@ -434,6 +457,7 @@ def filter_cards(
         cards_out = len(all_kept),
         removed   = all_removed,
         reasons   = reason_counts,
+        warnings  = warnings,
     )
 
     print(f"\n  {result.summary()}")

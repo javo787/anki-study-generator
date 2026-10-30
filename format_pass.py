@@ -28,6 +28,9 @@ except ImportError:
     sys.exit("❌  Run: pip install groq")
 
 from uz_transliterate import to_cyrillic, has_cyrillic
+from cards_json import parse_json_object
+from integrity import merge_returned, same_content
+from textmatch import as_text
 
 GROQ_MODEL   = "llama-3.3-70b-versatile"
 FORMAT_BATCH = 25
@@ -43,10 +46,17 @@ class FormatResult:
     cloze_demoted:     int  = 0   # cloze cards that couldn't be fixed, safely demoted to basic
     markdown_stripped:  int = 0
     uz_transliterated: int  = 0   # fields converted Latin -> Cyrillic Uzbek (lang="uz" only)
+    ai_content_rejected: int = 0  # model edits that changed CONTENT (not just format): reverted to the original
+    ai_missing:        int  = 0   # cards the model did not return: kept as they were
+    ai_rejected_batches: int = 0  # batches whose answer could not be matched to the cards at all
     errors:            list = field(default_factory=list)
 
     def summary(self) -> str:
         extra = f" | uz→Cyrillic: {self.uz_transliterated}" if self.uz_transliterated else ""
+        reverted = self.ai_content_rejected + self.ai_missing
+        if reverted or self.ai_rejected_batches:
+            extra += (f" | model edits reverted: {self.ai_content_rejected} changed content, "
+                      f"{self.ai_missing} cards not returned, {self.ai_rejected_batches} batch(es) unusable")
         return (
             f"Format: {self.cards_in} in → {self.cards_out} out | "
             f"cloze fixed: {self.cloze_fixed} | "
@@ -84,19 +94,21 @@ side, increased/decreased), add a hint after a second "::":
 event, reuse the same number (c1) for both. If they are independent facts \
 that deserve separate review cards, use different numbers (c1, c2, ...).
 
-3. Keep every other field (back, tags) as close to the original as \
-possible — only touch formatting, not content or difficulty.
+3. Return EVERY card, each with its "id" unchanged. Keep every other field as close to the \
+original as possible — only touch formatting, not content, numbers or difficulty.
 
 OUTPUT: JSON only — no markdown fences, no explanation.
 {
   "cards": [
     {
+      "id": 0,
       "front": "What produces cerebrospinal fluid?<br><br>{{c1::Choroid plexus}}",
       "back": "\\ud83d\\udca1 Located within the ventricles",
       "type": "cloze",
       "tags": ["neuroanatomy", "CSF"]
     },
     {
+      "id": 1,
       "front": "What are the three meningeal layers from outside to inside?",
       "back": "\\u2022 <b>D</b>ura mater<br>\\u2022 <b>A</b>rachnoid mater<br>\\u2022 <b>P</b>ia mater<br>\\ud83d\\udca1 Mnemonic: <b>DAP</b>",
       "type": "basic",
@@ -141,9 +153,21 @@ def _strip_markdown_bold(text: str) -> tuple[str, bool]:
     return fixed, fixed != text
 
 
-def _format_batch(cards: list[dict], deck: str, client: Groq) -> list[dict]:
-    cards_json = json.dumps(cards, indent=2, ensure_ascii=False)
-    prompt = FORMAT_USER.format(count=len(cards), deck=deck, cards_json=cards_json)
+def _format_batch(cards: list[dict], deck: str, client: Groq) -> tuple:
+    """
+    One batch through the format model. Returns (cards, stats).
+
+    The answer is merged onto the ORIGINAL cards by id (integrity.merge_returned): only front and
+    back can change. A format pass must not change what a card says, so an edit that changed a
+    number or the words (integrity.same_content) is reverted; a card the model dropped keeps its
+    original; an answer that cannot be matched at all changes nothing.
+    stats: {"content_rejected": n, "missing": n, "rejected_batch": bool}
+    """
+    stats   = {"content_rejected": 0, "missing": 0, "rejected_batch": False}
+    payload = [{"id": i, "front": as_text(c.get("front")), "back": as_text(c.get("back")),
+                "type": c.get("type", "basic")} for i, c in enumerate(cards)]
+    prompt  = FORMAT_USER.format(count=len(cards), deck=deck,
+                                 cards_json=json.dumps(payload, indent=2, ensure_ascii=False))
 
     for attempt in range(1, MAX_RETRY + 1):
         try:
@@ -155,16 +179,26 @@ def _format_batch(cards: list[dict], deck: str, client: Groq) -> list[dict]:
                 ],
                 temperature = 0.1,
             )
-            raw = response.choices[0].message.content.strip()
-            raw = re.sub(r"^```(?:json)?\s*", "", raw)
-            raw = re.sub(r"\s*```$", "", raw)
+            data     = parse_json_object(response.choices[0].message.content)
+            returned = data.get("cards") if isinstance(data, dict) else None
+            info     = merge_returned(cards, returned, ("front", "back"))
+            if info.rejected:
+                print("  ⚠️  Format answer could not be matched to the cards — kept as they were")
+                stats["rejected_batch"] = True
+                return cards, stats
 
-            data = json.loads(raw)
-            return data.get("cards", cards)
-
-        except json.JSONDecodeError as e:
-            print(f"  ⚠️  Format JSON parse error: {e}")
-            return cards
+            stats["missing"] = info.missing
+            out = []
+            for original, merged in zip(cards, info.cards):
+                if merged is original:
+                    out.append(original)
+                elif same_content((as_text(original.get("front")), as_text(original.get("back"))),
+                                  (as_text(merged.get("front")),   as_text(merged.get("back")))):
+                    out.append(merged)
+                else:
+                    out.append(original)
+                    stats["content_rejected"] += 1
+            return out, stats
 
         except Exception as e:
             err = str(e)
@@ -174,9 +208,9 @@ def _format_batch(cards: list[dict], deck: str, client: Groq) -> list[dict]:
                 time.sleep(wait)
             else:
                 print(f"  ⚠️  Format step error: {err[:80]}")
-                return cards
+                return cards, stats
 
-    return cards
+    return cards, stats
 
 
 def format_cards(
@@ -220,6 +254,7 @@ def format_cards(
     print(f"\n  🎨  Format pass: {cards_in} cards in {len(batches)} batch(es) [Groq]...")
 
     all_formatted = []
+    totals = {"content_rejected": 0, "missing": 0, "rejected_batches": 0}
     for i, batch in enumerate(batches, 1):
         for card in batch:
             if isinstance(card.get("back"),  list):
@@ -228,14 +263,19 @@ def format_cards(
                 card["front"] = " ".join(str(x) for x in card["front"])
 
         print(f"  🔄  Format batch {i}/{len(batches)}...", end=" ", flush=True)
-        formatted = _format_batch(batch, deck, client)
+        formatted, stats = _format_batch(batch, deck, client)
         print(f"done ({len(formatted)} cards)")
         all_formatted += formatted
+        totals["content_rejected"] += stats["content_rejected"]
+        totals["missing"]          += stats["missing"]
+        totals["rejected_batches"] += 1 if stats["rejected_batch"] else 0
 
         if i < len(batches):
             time.sleep(2)
 
-    result = FormatResult(cards_in=cards_in, cards_out=len(all_formatted))
+    result = FormatResult(cards_in=cards_in, cards_out=len(all_formatted),
+                          ai_content_rejected=totals["content_rejected"], ai_missing=totals["missing"],
+                          ai_rejected_batches=totals["rejected_batches"])
     all_formatted = _validate_and_repair(all_formatted, result)
     if enforce_uz:
         all_formatted = _enforce_uz_cyrillic(all_formatted, result)
