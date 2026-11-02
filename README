@@ -297,7 +297,7 @@ correctly (a Cloze note type must come from the first column of the file, see
 ## Built With
 
 - Python 3.13
-- Flask + Flask-CORS (web server)
+- Flask (web server; cross-origin access is off — see `ANKI_CORS_ORIGINS` in `server.py`)
 - google-genai (Gemini API)
 - groq (Groq API)
 - openai (NVIDIA NIM + OpenRouter)
