@@ -4,6 +4,8 @@ Combines smart chunking + multi-AI fallback + topic detection
 Requires: pip install google-genai groq
 """
 
+import copy
+import hashlib
 import re
 import sys
 import json
@@ -43,6 +45,7 @@ except ImportError:
 
 from profiles import GERMAN_FALLBACK_PROMPT, GERMAN_TOPIC_PROMPT, german_card_cap
 from sources import format_time
+from chunk_cache import ChunkCache
 
 # ── CONSTANTS ──────────────────────────────────────────────────────────────────
 
@@ -117,6 +120,7 @@ class GenerationResult:
     failed_chunks: list[int] = field(default_factory=list)  # chunk numbers that produced no cards
     warnings:     list[str] = field(default_factory=list)  # problems that are not a failed chunk (e.g. audio parts)
     transcript:   str       = "captions"                   # "captions" | "audio" (no captions -> Whisper)
+    cache_hits:   int       = 0                            # chunks reused from an earlier run (no model call)
 
     @property
     def success_rate(self) -> float:
@@ -408,6 +412,7 @@ def generate_from_youtube(
     profile:        str = "medical",
     audio_fallback=None,
     fallback_hint:  str = "",
+    cache:          ChunkCache = None,
 ) -> GenerationResult:
     """
     Full pipeline: YouTube URL → smart chunks → cards.
@@ -461,7 +466,7 @@ def generate_from_youtube(
         chunk.video_id = video_id          # lets each card link back to its moment in the video
     print(f"  📦  {len(chunks)} chunks from transcript")
 
-    result = _run_pipeline(chunks, deck, clients, detect_topics, on_progress, lang, profile)
+    result = _run_pipeline(chunks, deck, clients, detect_topics, on_progress, lang, profile, cache)
     result.transcript = transcript
     result.warnings.extend(warnings)
     return result
@@ -477,6 +482,7 @@ def generate_from_pdf(
     on_progress:    callable = None,
     lang:           str = "en",
     profile:        str = "medical",
+    cache:          ChunkCache = None,
 ) -> GenerationResult:
     """
     Full pipeline: PDF → smart chunks → cards.
@@ -485,7 +491,32 @@ def generate_from_pdf(
     chunks = chunk_pdf(path, page_from, page_to)
     print(f"  📦  {len(chunks)} chunks from PDF")
 
-    return _run_pipeline(chunks, deck, clients, detect_topics, on_progress, lang, profile)
+    return _run_pipeline(chunks, deck, clients, detect_topics, on_progress, lang, profile, cache)
+
+
+GENERATION_REV = 1   # bump when generation LOGIC changes in a way the prompt text does not show
+
+
+def prompt_fingerprint(profile: str, lang: str) -> str:
+    """A hash of everything that shapes a chunk's cards besides the chunk itself: the TEXT of the
+    prompts for this profile (Gemini, fallback, topic), the language instruction, the model.
+    Edit any of them and every cached chunk stops matching."""
+    import anki_gen as _anki_gen
+    import profiles as _profiles
+    if profile == "german":
+        prompts = [_profiles.GERMAN_SYSTEM_PROMPT, _profiles.GERMAN_FALLBACK_PROMPT, _profiles.GERMAN_TOPIC_PROMPT]
+    else:
+        prompts = [_anki_gen.SYSTEM_PROMPT, GROQ_CARD_PROMPT, TOPIC_PROMPT]
+    material = [GENERATION_REV, _anki_gen.MODEL, build_profile_instruction(lang, profile)] + prompts
+    return hashlib.sha256(json.dumps(material, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def make_chunk_cache(directory: str, deck: str, lang: str, profile: str, detect_topics: bool) -> ChunkCache:
+    """The per-chunk result cache for one run's settings (see chunk_cache.py)."""
+    return ChunkCache(directory, {
+        "profile": profile, "lang": lang, "deck": deck, "detect_topics": bool(detect_topics),
+        "prompts": prompt_fingerprint(profile, lang),
+    })
 
 
 def _chunk_label(chunk: Chunk) -> str:
@@ -503,8 +534,13 @@ def _run_pipeline(
     on_progress:    callable,
     lang:           str = "en",
     profile:        str = "medical",
+    cache:          ChunkCache = None,
 ) -> GenerationResult:
-    """Internal: run generation pipeline on a list of chunks."""
+    """Internal: run generation pipeline on a list of chunks.
+
+    cache: results of earlier runs. A chunk that is in it costs no model call at all (cards, topic
+    and provider come from disk); every chunk that succeeds is stored, chunks that fail never are —
+    so a re-run after a quota failure only asks for what is missing."""
 
     # Find primary Gemini client for topic detection
     gemini_clients = [c for c in clients if c.provider == "gemini"]
@@ -537,6 +573,17 @@ def _run_pipeline(
 
     for chunk in chunks:
 
+        # Reuse an earlier result for this exact chunk (and these exact prompts)
+        cached = cache.get(chunk) if cache else None
+        if cached:
+            chunk.topic_hint = cached["topic"]
+            print(f"  💾  Chunk {chunk.index}/{chunk.total}: reused from an earlier run ({len(cached['cards'])} cards)")
+            _accept(chunk, cached["cards"], "cache")
+            result.cache_hits += 1
+            if on_progress:
+                on_progress(chunk.index, chunk.total, chunk.topic_hint)
+            continue
+
         # Step 3: detect topic
         if detect_topics and primary_gemini:
             chunk.topic_hint = detect_topic(chunk, primary_gemini, profile)
@@ -550,6 +597,8 @@ def _run_pipeline(
         print(f"{len(cards)} cards [{provider}]")
 
         if cards:
+            if cache:
+                cache.put(chunk, cards, provider, chunk.topic_hint)      # BEFORE _accept tags/locates the cards
             _accept(chunk, cards, provider)
         else:
             pending.append(chunk)
@@ -570,6 +619,8 @@ def _run_pipeline(
             cards, provider = generate_chunk(chunk, deck, clients, lang, profile)
             print(f"{len(cards)} cards [{provider}]")
             if cards:
+                if cache:
+                    cache.put(chunk, cards, provider, chunk.topic_hint)
                 _accept(chunk, cards, provider)
             else:
                 still_failing.append(chunk)

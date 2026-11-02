@@ -9,7 +9,7 @@
 
 # Web server (server.py + index.html)
 flask>=3.1
-flask-cors>=6.0
+# flask-cors is optional: only needed if you set ANKI_CORS_ORIGINS (see server.py). Off by default.
 werkzeug>=3.1
 
 # AI providers

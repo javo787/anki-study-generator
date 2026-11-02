@@ -34,6 +34,7 @@ from generator import (
     build_nvidia_client,
     generate_from_youtube,
     generate_from_pdf,
+    make_chunk_cache,
 )
 from filter    import filter_cards, get_kept_cards
 from quality   import improve_cards, score_cards
@@ -42,11 +43,13 @@ from usage     import record, is_available, print_usage, get_all_usage
 from sources   import is_valid_time, restore_times, source_html
 from integrity import REVIEW_TAG, render_changes_report
 from profiles  import normalize_profile
+from chunk_cache import load_audio_transcript, save_audio_transcript
 from config    import load_config
 
 # ── CONSTANTS ──────────────────────────────────────────────────────────────────
 
 OUTPUT_DIR  = "output"
+CACHE_DIR  = "cache"              # resume cache (see chunk_cache.py); "cache_dir" in config.json overrides
 
 # ── DATA CLASSES ───────────────────────────────────────────────────────────────
 
@@ -66,6 +69,7 @@ class PipelineConfig:
     source_links: bool = True   # YouTube: link every card back to its moment in the video
     profile:      str  = "medical"  # "medical" | "german" — what kind of material this is (see profiles.py)
     audio_fallback: bool = True # YouTube video WITHOUT captions: download + transcribe the audio (Groq Whisper)
+    use_cache:    bool = True   # resume: reuse chunks (and audio transcripts) that an earlier run already finished
 
 
 @dataclass
@@ -290,8 +294,8 @@ def _usage_key(provider_name: str):
     quota monitor (usage.LIMITS) displays. Names were previously lower-cased into
     keys like 'gemini_gemini-2.5-flash' that the monitor never showed."""
     n = (provider_name or "").lower()
-    if n in ("", "none"):
-        return None
+    if n in ("", "none", "cache"):
+        return None                       # failed chunks, and chunks reused from the cache, use no quota
     if "gemini" in n:
         return "gemini_pro" if "pro" in n else "gemini_flash"
     for known in ("groq", "openrouter", "cerebras"):
@@ -317,6 +321,8 @@ def run(config: PipelineConfig, on_progress: callable = None) -> PipelineResult:
     """
     profile   = normalize_profile(config.profile)      # fail early on a typo, not after the API calls
     cfg       = load_config()
+    cache_dir = cfg.get("cache_dir") or CACHE_DIR
+    cache     = make_chunk_cache(cache_dir, config.deck, config.lang, profile, config.detect_topics) if config.use_cache else None
     started   = time.time()
     result    = PipelineResult(cards=[], filename="")
     result.stages["profile"] = profile
@@ -363,17 +369,27 @@ def run(config: PipelineConfig, on_progress: callable = None) -> PipelineResult:
                                  "(it also needs yt-dlp and ffmpeg).")
             else:
                 def audio_fallback(video_id):
-                    from video_gen import transcribe_youtube_audio          # lazy: needs the groq package
+                    import video_gen                                         # lazy: needs the groq package
+                    language = cfg.get("audio_language") or None
+                    if config.use_cache:                                     # transcribing is the expensive part: keep it
+                        hit = load_audio_transcript(cache_dir, video_id, language, video_gen.GROQ_MODEL)
+                        if hit:
+                            print("  💾  Audio transcript reused from an earlier run")
+                            return video_gen.AudioTranscript(entries=hit["entries"], failed_ranges=[], duration=hit["duration"])
+
                     def _audio_progress(step, total, message):
                         if on_progress:
                             on_progress({"stage": "generating", "chunk": 0, "total": 0, "topic": message,
                                          "pct": round(step / max(total, 1) * 10)})
-                    return transcribe_youtube_audio(
+                    audio = video_gen.transcribe_youtube_audio(
                         video_id, cfg["groq_api_key"],
-                        language    = cfg.get("audio_language") or None,
+                        language    = language,
                         proxy_url   = _proxy_url(proxy_config),
                         on_progress = _audio_progress,
                     )
+                    if config.use_cache and audio.entries and not audio.failed_ranges:      # only a COMPLETE transcript
+                        save_audio_transcript(cache_dir, video_id, language, video_gen.GROQ_MODEL, audio.entries, audio.duration)
+                    return audio
 
             gen_result = generate_from_youtube(
                 url            = config.input,
@@ -386,6 +402,7 @@ def run(config: PipelineConfig, on_progress: callable = None) -> PipelineResult:
                 profile        = profile,
                 audio_fallback = audio_fallback,
                 fallback_hint  = fallback_hint,
+                cache          = cache,
             )
         elif config.source == "pdf":
             gen_result = generate_from_pdf(
@@ -398,6 +415,7 @@ def run(config: PipelineConfig, on_progress: callable = None) -> PipelineResult:
                 on_progress   = _progress,
                 lang          = config.lang,
                 profile       = profile,
+                cache         = cache,
             )
         elif config.source == "video":
             from video_gen import transcribe_local_video
@@ -468,7 +486,7 @@ def run(config: PipelineConfig, on_progress: callable = None) -> PipelineResult:
             print(f"  📦  {len(chunks)} chunks from video transcript")
 
             from generator import _run_pipeline
-            gen_result = _run_pipeline(chunks, config.deck, clients, config.detect_topics, _progress, config.lang, profile)
+            gen_result = _run_pipeline(chunks, config.deck, clients, config.detect_topics, _progress, config.lang, profile, cache)
 
     except Exception as e:
         raise RuntimeError(f"Generation failed: {e}")
@@ -487,6 +505,7 @@ def run(config: PipelineConfig, on_progress: callable = None) -> PipelineResult:
         "coverage_pct":  coverage_pct,
         "ai_used":       gen_result.ai_used,
         "transcript":    gen_result.transcript,
+        "cache_hits":    gen_result.cache_hits,
     }
     errors.extend(gen_result.warnings)          # e.g. audio parts that could not be transcribed
 
@@ -736,6 +755,7 @@ def run_youtube(
     source_links: bool = True,
     profile:      str  = "medical",
     audio_fallback: bool = True,
+    use_cache:    bool = True,
 ) -> PipelineResult:
     return run(PipelineConfig(
         source       = "youtube",
@@ -748,6 +768,7 @@ def run_youtube(
         source_links = source_links,
         profile      = profile,
         audio_fallback = audio_fallback,
+        use_cache    = use_cache,
     ), on_progress=on_progress)
 
 
@@ -761,6 +782,7 @@ def run_pdf(
     run_quality:  bool = True,
     on_progress:  callable = None,
     profile:      str  = "medical",
+    use_cache:    bool = True,
 ) -> PipelineResult:
     return run(PipelineConfig(
         source      = "pdf",
@@ -773,6 +795,7 @@ def run_pdf(
         run_quality = run_quality,
         on_progress = on_progress,
         profile     = profile,
+        use_cache   = use_cache,
     ), on_progress=on_progress)
 
 
@@ -784,6 +807,7 @@ def run_video(
     run_quality:  bool = True,
     on_progress:  callable = None,
     profile:      str  = "medical",
+    use_cache:    bool = True,
 ) -> PipelineResult:
     return run(PipelineConfig(
         source      = "video",
@@ -794,6 +818,7 @@ def run_video(
         run_quality = run_quality,
         on_progress = on_progress,
         profile     = profile,
+        use_cache   = use_cache,
     ), on_progress=on_progress)
 
 

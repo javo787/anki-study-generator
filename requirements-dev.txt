@@ -7,3 +7,6 @@ pytest>=8.0
 # export format is caught by a test instead of by a ruined study session.
 # The test is skipped automatically when this package is not installed.
 anki>=24.11
+
+# tests/test_server_security.py exercises the opt-in CORS switch
+flask-cors>=6.0

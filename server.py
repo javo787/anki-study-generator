@@ -17,10 +17,9 @@ from datetime import datetime
 
 try:
     from flask import Flask, request, jsonify, send_file
-    from flask_cors import CORS
     from werkzeug.utils import secure_filename
 except ImportError:
-    sys.exit("❌  Run: pip install flask flask-cors")
+    sys.exit("❌  Run: pip install flask")
 
 from pipeline import run_youtube, run_pdf, run_video, PipelineConfig, save_cards
 from profiles import normalize_profile
@@ -32,8 +31,28 @@ from config   import load_config, save_config, mask_key
 OUTPUT_DIR  = "output"
 PORT        = 5000
 
+
+
+def enable_cors(flask_app, origins) -> None:
+    """
+    Cross-origin access is OFF by default. The web UI is served by this same app (same origin),
+    so it does not need CORS — and `CORS(app)` (allow every origin) let ANY website open in your
+    browser call this local server: change your API keys / proxy in Settings, start runs that burn
+    your quota, upload files. Opt in only for tools you trust, by origin:
+        ANKI_CORS_ORIGINS="http://localhost:3000,https://my.tool"   (needs: pip install flask-cors)
+    """
+    allowed = [o.strip() for o in (origins or "").split(",") if o.strip()]
+    if not allowed:
+        return
+    try:
+        from flask_cors import CORS
+    except ImportError:
+        sys.exit("❌  ANKI_CORS_ORIGINS is set: run  pip install flask-cors")
+    CORS(flask_app, origins=allowed)
+
+
 app  = Flask(__name__)
-CORS(app)
+enable_cors(app, os.environ.get("ANKI_CORS_ORIGINS"))
 app.config["MAX_CONTENT_LENGTH"] = 2048 * 1024 * 1024  # 2 GB ceiling for lecture videos
 
 # Progress state per session
@@ -174,6 +193,7 @@ def route_youtube():
             source_links = data.get("source_links", True),
             profile      = profile,
             audio_fallback = data.get("audio_fallback", True),
+            use_cache      = data.get("use_cache", True),
         )
         return jsonify({
             "ok":       True,
@@ -228,6 +248,7 @@ def route_pdf():
             run_quality = data.get("run_quality", True),
             on_progress = on_progress,
             profile     = profile,
+            use_cache   = data.get("use_cache", True),
         )
         return jsonify({
             "ok":       True,
@@ -284,6 +305,7 @@ def route_video():
             run_quality = data.get("run_quality", True),
             on_progress = on_progress,
             profile     = profile,
+            use_cache   = data.get("use_cache", True),
         )
         return jsonify({
             "ok":       True,
