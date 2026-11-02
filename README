@@ -208,6 +208,23 @@ python pipeline.py pdf "C:\path\to\book.pdf" "Deck Name" 11 50
 
 ---
 
+## Resume (a failed run does not start from zero)
+
+Free API tiers run out half way through a long video. What already succeeded is now kept in `cache/`
+(`"cache_dir"` in `config.json` changes the folder; the *Resume* switch in the UI turns it off):
+
+- the cards of every chunk that was generated (a chunk that failed is never stored),
+- the Whisper transcript of a video without captions (only a **complete** one).
+
+Run the same video again and only the missing chunks are asked for; reused chunks cost no model call
+and no quota. The cache key is a hash of the chunk's text, profile, card language, deck, the **text of
+every prompt** and the model — so editing a prompt invalidates it by itself and you never get cards
+made by an old prompt. Entries older than 60 days are deleted. Example (9 chunks, 5 hit the rate limit
+on the first run): second run asks for the 5 missing chunks only (10 requests instead of 18), a third
+run asks for nothing (0 requests).
+
+---
+
 ## No silent edits (AI changes are checked, tagged and reported)
 
 The filter, quality and format steps all let a model touch your cards. Each one now works under the

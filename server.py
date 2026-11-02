@@ -193,6 +193,7 @@ def route_youtube():
             source_links = data.get("source_links", True),
             profile      = profile,
             audio_fallback = data.get("audio_fallback", True),
+            use_cache      = data.get("use_cache", True),
         )
         return jsonify({
             "ok":       True,
@@ -247,6 +248,7 @@ def route_pdf():
             run_quality = data.get("run_quality", True),
             on_progress = on_progress,
             profile     = profile,
+            use_cache   = data.get("use_cache", True),
         )
         return jsonify({
             "ok":       True,
@@ -303,6 +305,7 @@ def route_video():
             run_quality = data.get("run_quality", True),
             on_progress = on_progress,
             profile     = profile,
+            use_cache   = data.get("use_cache", True),
         )
         return jsonify({
             "ok":       True,

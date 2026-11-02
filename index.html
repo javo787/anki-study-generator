@@ -377,6 +377,17 @@ input:focus { border-color: #6c8ef5; }
           <span class="toggle-slider"></span>
         </label>
       </div>
+
+      <div class="toggle-row">
+        <div>
+          <div class="toggle-label">Resume (reuse earlier results)</div>
+          <div class="toggle-sub">A re-run skips chunks that already worked — saves quota. Turn off to regenerate everything</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="toggleCache" checked>
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
     </div>
 
     <button class="btn btn-primary btn-full" id="genBtn" onclick="generate()">
@@ -739,6 +750,7 @@ async function generate() {
     profile:     currentProfile,
     run_filter:  document.getElementById('toggleFilter').checked,
     run_quality: document.getElementById('toggleQuality').checked,
+    use_cache:   document.getElementById('toggleCache').checked,
     session_id:  sessionId,
   };
 

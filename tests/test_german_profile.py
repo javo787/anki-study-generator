@@ -167,7 +167,7 @@ def test_generate_from_pdf_forwards_the_profile(monkeypatch):
     monkeypatch.setattr(generator, "chunk_pdf", lambda *a, **k: [pdf_chunk()])
     monkeypatch.setattr(generator, "_run_pipeline", lambda *a, **k: seen.update(args=a) or generator.GenerationResult([], 0, 0))
     generator.generate_from_pdf("x.pdf", "D", [], profile="german")
-    assert seen["args"][-1] == "german"
+    assert seen["args"][-2] == "german"                                      # (..., lang, profile, cache)
 
 
 # ── filter: no medical "trivial" verdicts on vocabulary ─────────────────────────
